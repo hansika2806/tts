@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Read Aloud Web</title>
+  <meta
+    name="description"
+    content="Standalone text-to-speech web app inspired by Read Aloud, with native browser voices and official provider integrations."
+  >
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/webapp/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Standalone webapp</p>
+        <h1>Read Aloud Web</h1>
+        <p class="hero-text">
+          A browser-first text-to-speech workspace built from the extension codebase, redesigned for standalone use with official provider integrations where they are technically and legally viable.
+        </p>
+      </div>
+      <div class="hero-meta">
+        <div class="meta-card">
+          <span class="meta-label">Provider parity</span>
+          <strong>Native, Google Translate Experimental, OpenAI, Google Cloud, Amazon Polly, Azure, IBM</strong>
+        </div>
+        <div class="meta-card">
+          <span class="meta-label">Not portable from extension</span>
+          <strong>Read Aloud premium, page injection, phone/Piper/Supertonic</strong>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel-editor">
+        <div class="panel-head">
+          <div>
+            <p class="section-kicker">Input</p>
+            <h2>Compose What Should Be Read</h2>
+          </div>
+          <div class="toolbar">
+            <button id="sample-button" class="button button-ghost" type="button">Sample Text</button>
+            <label class="button button-ghost file-button" for="file-input">Import .txt</label>
+            <input id="file-input" type="file" accept=".txt,text/plain">
+            <label class="button button-ghost file-button" for="pdf-input">Import PDF</label>
+            <input id="pdf-input" type="file" accept="application/pdf,.pdf">
+            <button id="clear-button" class="button button-ghost" type="button">Clear</button>
+          </div>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Title</span>
+          <input id="document-title" type="text" maxlength="120" placeholder="Optional title for this reading session">
+        </label>
+
+        <label class="field">
+          <span class="field-label">Text</span>
+          <textarea id="text-input" placeholder="Paste or type the text you want to hear."></textarea>
+        </label>
+
+        <div class="stats-row">
+          <span id="char-count">0 characters</span>
+          <span id="chunk-count">0 reading chunks</span>
+        </div>
+      </section>
+
+      <section class="panel panel-voice">
+        <div class="panel-head">
+          <div>
+            <p class="section-kicker">Voice</p>
+            <h2>Choose Provider and Playback</h2>
+          </div>
+          <button id="refresh-voices" class="button button-ghost" type="button">Refresh Voices</button>
+        </div>
+
+        <div id="provider-picker" class="provider-picker" role="radiogroup" aria-label="Voice provider"></div>
+
+        <div class="control-grid">
+          <label class="field">
+            <span class="field-label">Provider voice</span>
+            <select id="voice-select"></select>
+          </label>
+          <label class="field">
+            <span class="field-label">Reading mode</span>
+            <select id="chunk-mode">
+              <option value="balanced">Balanced chunks</option>
+              <option value="paragraphs">Whole paragraphs</option>
+              <option value="sentences">Short sentence chunks</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="sliders">
+          <label class="slider-field">
+            <span class="field-label">Rate</span>
+            <input id="rate-input" type="range" min="0.5" max="2" step="0.05" value="1">
+            <output id="rate-output">1.00x</output>
+          </label>
+          <label class="slider-field">
+            <span class="field-label">Pitch</span>
+            <input id="pitch-input" type="range" min="0.5" max="1.5" step="0.05" value="1">
+            <output id="pitch-output">1.00x</output>
+          </label>
+          <label class="slider-field">
+            <span class="field-label">Volume</span>
+            <input id="volume-input" type="range" min="0.1" max="1" step="0.05" value="1">
+            <output id="volume-output">100%</output>
+          </label>
+        </div>
+
+        <div class="transport">
+          <button id="play-button" class="button button-primary" type="button">Play</button>
+          <button id="pause-button" class="button button-secondary" type="button">Pause</button>
+          <button id="resume-button" class="button button-secondary" type="button">Resume</button>
+          <button id="stop-button" class="button button-secondary" type="button">Stop</button>
+        </div>
+
+        <div class="status-card">
+          <span class="status-label">Playback status</span>
+          <strong id="playback-status">Idle</strong>
+          <p id="status-message">Choose a provider, load or paste text, and start playback.</p>
+        </div>
+
+        <div class="credentials-panel">
+          <div class="panel-head panel-head-inline">
+            <div>
+              <p class="section-kicker">Credentials</p>
+              <h2>Provider Settings</h2>
+            </div>
+            <button id="save-credentials" class="button button-primary" type="button">Save Settings</button>
+          </div>
+          <p class="credentials-note">
+            Browser voices need no key. Google Translate is experimental and proxied through your local server. Cloud providers need your own account credentials. For any shared or public deployment, move secrets behind your own backend proxy.
+          </p>
+          <div id="credentials-forms" class="credentials-forms"></div>
+        </div>
+      </section>
+
+      <section class="panel panel-reader">
+        <div class="panel-head">
+          <div>
+            <p class="section-kicker">Reader</p>
+            <h2>Live Reading Queue</h2>
+          </div>
+        </div>
+        <div class="reader-header">
+          <div>
+            <span class="meta-label">Current document</span>
+            <strong id="reader-title">Untitled session</strong>
+          </div>
+          <div>
+            <span class="meta-label">Progress</span>
+            <strong id="reader-progress">0 / 0</strong>
+          </div>
+        </div>
+        <div id="reader-preview" class="reader-preview empty">
+          Playback highlights active chunks here.
+        </div>
+        <div id="chunk-list" class="chunk-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/js/aws-sdk.js"></script>
+  <script type="module" src="/webapp/js/main.js"></script>
+</body>
+</html>
