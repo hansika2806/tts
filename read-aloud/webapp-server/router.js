@@ -3,6 +3,9 @@ const path = require("path");
 const contentTypes = require("./content-types");
 const googleTranslate = require("./google-translate");
 
+const pdfUploads = new Map();
+const MAX_PDF_UPLOAD_BYTES = 80 * 1024 * 1024;
+
 async function handleRequest(req, res, rootDir, fallbackOrigin) {
   const url = new URL(req.url, fallbackOrigin);
 
@@ -18,6 +21,40 @@ async function handleRequest(req, res, rootDir, fallbackOrigin) {
       "Cache-Control": "no-store",
     });
     res.end(audio);
+    return;
+  }
+
+  if (url.pathname === "/api/pdf-upload" && req.method === "POST") {
+    const pdf = await readBuffer(req, MAX_PDF_UPLOAD_BYTES);
+    if (!pdf.length) {
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "Empty PDF upload" }));
+      return;
+    }
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    pdfUploads.set(id, {
+      data: pdf,
+      expiresAt: Date.now() + 60 * 60 * 1000,
+    });
+    prunePdfUploads();
+    return sendJson(res, 200, { url: `/api/pdf-file/${id}` });
+  }
+
+  if (url.pathname.startsWith("/api/pdf-file/") && req.method === "GET") {
+    prunePdfUploads();
+    const id = url.pathname.slice("/api/pdf-file/".length);
+    const entry = pdfUploads.get(id);
+    if (!entry) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("PDF not found");
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": "application/pdf",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": fallbackOrigin,
+    });
+    res.end(entry.data);
     return;
   }
 
@@ -56,6 +93,13 @@ async function handleRequest(req, res, rootDir, fallbackOrigin) {
   });
 }
 
+function prunePdfUploads() {
+  const now = Date.now();
+  for (const [id, entry] of pdfUploads) {
+    if (entry.expiresAt <= now) pdfUploads.delete(id);
+  }
+}
+
 function readJson(req) {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -73,6 +117,24 @@ function readJson(req) {
         reject(new Error("Invalid JSON body"));
       }
     });
+    req.on("error", reject);
+  });
+}
+
+function readBuffer(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (chunk) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        reject(new Error("PDF upload too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
 }

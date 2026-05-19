@@ -3,11 +3,13 @@
  * Handles: open PDF → render → play TTS per page/chunk → highlight on canvas
  */
 
+import { releaseAudioResources } from "./audio.js";
 import { openPdfBook, highlightChunk } from "./pdf-reader.js";
+import { applyPronunciations } from "./pronunciation.js";
 
 const $ = (id) => document.getElementById(id);
 
-export function initPdfReader(state, runtime, providers, ui) {
+export function initPdfReader(state, runtime, providers, ui, hooks = {}) {
   const canvasArea    = $("pdf-canvas-area");
   const emptyState    = $("pdf-empty-state");
   const fileInput     = $("pdf-reader-input");
@@ -42,10 +44,20 @@ export function initPdfReader(state, runtime, providers, ui) {
   let sidebarPending = [];
   let sidebarFlushId = null;
   let uiEnabled      = false;
+  let pendingRestoreChunk = null;
 
   rateInput?.addEventListener("input", () => {
     if (rateOutput) rateOutput.value = `${Number(rateInput.value).toFixed(2)}×`;
-    if (currentAudio) currentAudio.playbackRate = Number(rateInput.value);
+    // Live rate update — runtime.currentAudio is the actual playing element
+    const newRate = Number(rateInput.value);
+    if (runtime.currentAudio) {
+      runtime.currentAudio.defaultPlaybackRate = newRate;
+      runtime.currentAudio.playbackRate = newRate;
+    }
+    // Native voice support
+    if (runtime.currentUtterance) {
+      // Can't change rate mid-utterance for SpeechSynthesis, but set for next chunk
+    }
   });
 
   fileInput.addEventListener("change", async (e) => {
@@ -57,7 +69,7 @@ export function initPdfReader(state, runtime, providers, ui) {
     await loadPdf(file);
   });
 
-  async function loadPdf(file) {
+  async function loadPdf(file, options = {}) {
     stopReading();
     setStatus("loading", "Loading…", "Starting PDF parser…");
     emptyState?.remove();
@@ -69,6 +81,7 @@ export function initPdfReader(state, runtime, providers, ui) {
       sidebarFlushId = null;
     }
     currentChunk = 0;
+    pendingRestoreChunk = Number.isInteger(options.restoreChunk) ? options.restoreChunk : null;
     pageWrappers = [];
     uiEnabled = false;
     setTransportEnabled(false);
@@ -81,6 +94,7 @@ export function initPdfReader(state, runtime, providers, ui) {
         (chunk) => {
           pdfChunks.push(chunk);
           queueSidebarChunk(chunk);
+          restorePendingChunkIfReady();
 
           if (!uiEnabled && pdfChunks.length === 1) {
             uiEnabled = true;
@@ -90,16 +104,22 @@ export function initPdfReader(state, runtime, providers, ui) {
             setTransportEnabled(true);
             if (navBadge) navBadge.style.display = "inline-block";
 
-            highlightChunk(pdfChunks[0], pageWrappers, { smooth: false });
+            restorePendingChunkIfReady();
+            highlightChunk(pdfChunks[currentChunk] || pdfChunks[0], pageWrappers, { smooth: false });
             updateNav();
             updateSidebarActive(false);
           }
 
           setStatus("loading", "Extracting…", `${pdfChunks.length} sections extracted…`);
         },
-        () => {
+        (meta) => {
           flushSidebarChunks();
-          setStatus("idle", "Ready", `${result.pageCount} pages — ${pdfChunks.length} sections.`);
+          restorePendingChunkIfReady(true);
+          hooks.onProgress?.({
+            chunkIndex: currentChunk,
+            pageCount: meta?.pageCount ?? result.pageCount,
+          });
+          setStatus("idle", "Ready", `${result.pageCount} pages — ${pdfChunks.length} pages to read.`);
         }
       );
 
@@ -107,6 +127,13 @@ export function initPdfReader(state, runtime, providers, ui) {
     } catch (err) {
       setStatus("error", "Error", err.message);
     }
+  }
+
+  function restorePendingChunkIfReady(force = false) {
+    if (pendingRestoreChunk == null || !pdfChunks.length) return;
+    if (!force && pendingRestoreChunk >= pdfChunks.length) return;
+    currentChunk = Math.max(0, Math.min(pendingRestoreChunk, pdfChunks.length - 1));
+    pendingRestoreChunk = null;
   }
 
   function setTransportEnabled(on) {
@@ -141,6 +168,7 @@ export function initPdfReader(state, runtime, providers, ui) {
     const idx = chunk.id;
     const item = document.createElement("div");
     item.className = "chunk-item" + (idx === currentChunk ? " is-active" : "");
+    item.dataset.chunkId = String(idx);
     item.innerHTML = `
       <div class="chunk-item-header">
         <span>Page ${chunk.pageIndex + 1}</span>
@@ -169,10 +197,12 @@ export function initPdfReader(state, runtime, providers, ui) {
     highlightChunk(pdfChunks[currentChunk], pageWrappers, { smooth });
     updateNav();
     updateSidebarActive(!isReading);
+    hooks.onProgress?.({ chunkIndex: currentChunk, pageCount: pageWrappers.length });
   }
 
   function interruptPlaybackLoop() {
     stopRequested = true;
+    runtime.stopRequested = true;
     if (currentAudio) {
       currentAudio.pause();
       currentAudio = null;
@@ -181,12 +211,16 @@ export function initPdfReader(state, runtime, providers, ui) {
       URL.revokeObjectURL(currentObjUrl);
       currentObjUrl = null;
     }
+    runtime.currentAudio?.pause();
+    speechSynthesis.cancel();
+    releaseAudioResources(runtime);
     isReading = false;
     setPlayButtonState(false);
   }
 
   function updateSidebarActive(scrollActive = true) {
-    chunkList.querySelectorAll(".chunk-item").forEach((el, i) => {
+    chunkList.querySelectorAll(".chunk-item").forEach((el) => {
+      const i = Number(el.dataset.chunkId);
       el.classList.toggle("is-active", i === currentChunk);
       el.classList.toggle("is-done", i < currentChunk);
     });
@@ -260,6 +294,7 @@ export function initPdfReader(state, runtime, providers, ui) {
     }
 
     stopRequested = false;
+    runtime.stopRequested = false;
     isReading = true;
     setPlayButtonState(true);
     setStatus("playing", "Playing", "");
@@ -292,6 +327,7 @@ export function initPdfReader(state, runtime, providers, ui) {
 
   function stopReading() {
     stopRequested = true;
+    runtime.stopRequested = true;
     isReading = false;
     setPlayButtonState(false);
     if (currentAudio) {
@@ -302,60 +338,28 @@ export function initPdfReader(state, runtime, providers, ui) {
       URL.revokeObjectURL(currentObjUrl);
       currentObjUrl = null;
     }
+    runtime.currentAudio?.pause();
+    speechSynthesis.cancel();
+    releaseAudioResources(runtime);
     setStatus("idle", "Stopped", "Playback stopped.");
   }
 
   async function speakChunk(text, voice) {
-    const rate = Number(rateInput?.value ?? 1);
-    const words = text.split(/\s+/);
-    const subChunks = [];
-    let cur = "";
-    for (const w of words) {
-      if ((cur + " " + w).length > 180) {
-        if (cur) subChunks.push(cur.trim());
-        cur = w;
-      } else {
-        cur += (cur ? " " : "") + w;
+    const provider = providers[state.provider];
+    if (!provider?.speak) throw new Error("No TTS provider");
+    const dict = { ...state.globalPronunciations, ...(state.activeBookPronunciations || {}) };
+    const prepared = applyPronunciations(text, dict);
+    const rate = Number(rateInput?.value ?? state.rate ?? 1);
+    await provider.speak(
+      { text: prepared },
+      voice,
+      {
+        rate,
+        pitch: state.pitch,
+        volume: state.volume,
+        onStart: () => {},
       }
-    }
-    if (cur) subChunks.push(cur.trim());
-
-    for (const sub of subChunks) {
-      if (stopRequested) return;
-      try {
-        const res = await fetch("/api/google-translate/speak", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: sub, lang: voice.lang }),
-        });
-        if (!res.ok) throw new Error("TTS request failed");
-        const blob = await res.blob();
-        await playBlob(blob, rate);
-      } catch (err) {
-        setStatus("error", "Error", err.message);
-        stopRequested = true;
-        return;
-      }
-    }
-  }
-
-  function playBlob(blob, rate) {
-    return new Promise((resolve) => {
-      if (currentObjUrl) URL.revokeObjectURL(currentObjUrl);
-      currentObjUrl = URL.createObjectURL(blob);
-      currentAudio = new Audio(currentObjUrl);
-      if ("preservesPitch" in currentAudio) currentAudio.preservesPitch = true;
-      currentAudio.playbackRate = rate;
-      currentAudio.onended = () => {
-        currentAudio = null;
-        resolve();
-      };
-      currentAudio.onerror = () => {
-        currentAudio = null;
-        resolve();
-      };
-      currentAudio.play().catch(resolve);
-    });
+    );
   }
 
   dlBtn?.addEventListener("click", async (e) => {
@@ -432,4 +436,15 @@ export function initPdfReader(state, runtime, providers, ui) {
         type === "error" ? "error" : type === "playing" ? "playing" : type === "loading" ? "paused" : "";
     }
   }
+
+  async function loadPdfBlob(blob, book) {
+    const file =
+      blob instanceof File
+        ? blob
+        : new File([blob], `${book?.title || "book"}.pdf`, { type: "application/pdf" });
+    document.querySelector('[data-tab="pdfreader"]')?.click();
+    await loadPdf(file, { restoreChunk: book?.progress?.chunkIndex ?? 0 });
+  }
+
+  return { loadPdfBlob };
 }

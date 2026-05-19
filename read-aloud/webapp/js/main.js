@@ -1,62 +1,133 @@
-import { persistState, loadState } from "./storage.js";
+import { persistState, loadState, flushPersist } from "./storage.js";
 import { createProviders } from "./providers.js";
 import { createUi } from "./ui.js";
-import { extractTextFromPdf } from "./pdf-import.js";
 import { releaseAudioResources } from "./audio.js";
-import { initPdfReader } from "./pdf-controller.js";
+import { buildChunks } from "./queue.js";
+import { buildChapterIndex } from "./chapters.js";
+import { updateLoadProgress, hideLoadProgress } from "./book-load-progress.js";
+import {
+  initFlipbook,
+  onPageAudioDone,
+  onChapterAudioDone,
+  syncFlipbookToChunk,
+  setPdfDisplayQueue,
+  refreshPdfListenView,
+} from "./pdf-flipbook.js?v=reader-recovery";
+import { createNovelFeatures } from "./novel-features.js";
+import {
+  listBooks,
+  saveBook,
+  loadBook,
+  removeBook,
+  importTxtFile,
+  importEpubFile,
+  importPdfFile,
+  importFromUrl,
+} from "./library.js";
+import { debounce } from "./utils.js";
+import { initThemeManager } from "./theme.js";
+import { initMicroInteractions } from "./micro-interactions.js";
+import { initThreeBackground } from "./three-bg.js";
 
 const elements = {
-  providerPicker:  document.getElementById("provider-picker"),
-  voiceSelect:     document.getElementById("voice-select"),
-  textInput:       document.getElementById("text-input"),
-  titleInput:      document.getElementById("document-title"),
-  charCount:       document.getElementById("char-count"),
-  chunkCount:      document.getElementById("chunk-count"),
-  chunkMode:       document.getElementById("chunk-mode"),
-  rateInput:       document.getElementById("rate-input"),
-  pitchInput:      document.getElementById("pitch-input"),
-  volumeInput:     document.getElementById("volume-input"),
-  rateOutput:      document.getElementById("rate-output"),
-  pitchOutput:     document.getElementById("pitch-output"),
-  volumeOutput:    document.getElementById("volume-output"),
-  // Sidebar mini-player buttons (authoritative — player tab forwards to these)
-  playButton:      document.getElementById("play-button"),
-  pauseButton:     document.getElementById("pause-button"),
-  resumeButton:    document.getElementById("resume-button"),
-  stopButton:      document.getElementById("stop-button"),
-  downloadButton:  document.getElementById("download-button"),
-  playbackStatus:  document.getElementById("playback-status"),
-  statusMessage:   document.getElementById("status-message"),
-  statusCard:      document.getElementById("status-card"),
-  refreshVoices:   document.getElementById("refresh-voices"),
+  providerPicker: document.getElementById("provider-picker"),
+  voiceSelect: document.getElementById("voice-select"),
+  dialogueVoiceSelect: document.getElementById("dialogue-voice-select"),
+  textInput: document.getElementById("text-input"),
+  titleInput: document.getElementById("document-title"),
+  charCount: document.getElementById("char-count"),
+  chunkCount: document.getElementById("chunk-count"),
+  chunkMode: document.getElementById("chunk-mode"),
+  rateInput: document.getElementById("rate-input"),
+  pitchInput: document.getElementById("pitch-input"),
+  volumeInput: document.getElementById("volume-input"),
+  rateOutput: document.getElementById("rate-output"),
+  pitchOutput: document.getElementById("pitch-output"),
+  volumeOutput: document.getElementById("volume-output"),
+  playButton: document.getElementById("play-button"),
+  pauseButton: document.getElementById("pause-button"),
+  resumeButton: document.getElementById("resume-button"),
+  stopButton: document.getElementById("stop-button"),
+  playButtonLarge: document.getElementById("play-button-2"),
+  pauseButtonLarge: document.getElementById("pause-button-2"),
+  resumeButtonLarge: document.getElementById("resume-button-2"),
+  stopButtonLarge: document.getElementById("stop-button-2"),
+  downloadButton: document.getElementById("download-button"),
+  downloadChapterBtn: document.getElementById("download-chapter-btn"),
+  playbackStatus: document.getElementById("playback-status"),
+  statusMessage: document.getElementById("status-message"),
+  statusCard: document.getElementById("status-card"),
+  refreshVoices: document.getElementById("refresh-voices"),
   saveCredentials: document.getElementById("save-credentials"),
-  credentialsForms:document.getElementById("credentials-forms"),
-  readerTitle:     document.getElementById("reader-title"),
-  readerProgress:  document.getElementById("reader-progress"),
-  readerPreview:   document.getElementById("reader-preview"),
-  chunkList:       document.getElementById("chunk-list"),
-  sampleButton:    document.getElementById("sample-button"),
-  clearButton:     document.getElementById("clear-button"),
-  fileInput:       document.getElementById("file-input"),
+  credentialsForms: document.getElementById("credentials-forms"),
+  readerTitle: document.getElementById("reader-title"),
+  readerProgress: document.getElementById("reader-progress"),
+  readerPreview: document.getElementById("reader-preview"),
+  chunkList: document.getElementById("chunk-list"),
+  chapterJump: document.getElementById("chapter-jump"),
+  bookmarksList: document.getElementById("bookmarks-list"),
+  sampleButton: document.getElementById("sample-button"),
+  clearButton: document.getElementById("clear-button"),
+  fileInput: document.getElementById("file-input"),
+  libraryGrid: document.getElementById("library-grid"),
+  libraryTxtInput: document.getElementById("library-txt-input"),
+  libraryEpubInput: document.getElementById("library-epub-input"),
+  libraryPdfInput: document.getElementById("library-pdf-input"),
+  libraryUrlBtn: document.getElementById("library-url-btn"),
+  sleepTimerSelect: document.getElementById("sleep-timer"),
+  sleepTimerLabel: document.getElementById("sleep-timer-label"),
+  playbackModeSelect: document.getElementById("playback-mode"),
+  focusModeBtn: document.getElementById("focus-mode-btn"),
+  bookmarkBtn: document.getElementById("bookmark-btn"),
+  replayChunkBtn: document.getElementById("replay-chunk-btn"),
+  pronunciationInput: document.getElementById("pronunciation-input"),
+  pronunciationSave: document.getElementById("pronunciation-save"),
+  exportProgressBtn: document.getElementById("export-progress-btn"),
+  importProgressInput: document.getElementById("import-progress-input"),
+  bookExperience: document.getElementById("book-experience"),
+  bookExperienceType: document.getElementById("book-experience-type"),
+  bookExperienceTitle: document.getElementById("book-experience-title"),
+  bookExperienceAuthor: document.getElementById("book-experience-author"),
+  bookExperienceStats: document.getElementById("book-experience-stats"),
+  bookStartBtn: document.getElementById("book-start-btn"),
+  bookContinueBtn: document.getElementById("book-continue-btn"),
+  chapterTransition: document.getElementById("chapter-transition"),
+  chapterTransitionKicker: document.getElementById("chapter-transition-kicker"),
+  chapterTransitionTitle: document.getElementById("chapter-transition-title"),
+  chapterTransitionMeta: document.getElementById("chapter-transition-meta"),
 };
 
 const persisted = loadState();
 const state = {
-  provider: persisted.provider || "native",
+  provider: persisted.provider || "googleTranslate",
   voiceId: persisted.voiceId || "",
+  dialogueVoiceId: persisted.dialogueVoiceId || "",
   text: persisted.text || "",
   title: persisted.title || "",
-  chunkMode: persisted.chunkMode || "balanced",
-  rate: persisted.rate || 1,
-  pitch: persisted.pitch || 1,
-  volume: persisted.volume || 1,
+  chunkMode: persisted.chunkMode || "novel",
+  rate: persisted.rate ?? 1,
+  pitch: persisted.pitch ?? 1,
+  volume: persisted.volume ?? 1,
   credentials: persisted.credentials || {},
   cachedVoices: persisted.cachedVoices || {},
+  activeBookId: persisted.activeBookId || "",
+  playbackMode: persisted.playbackMode || "normal",
+  sleepTimerMinutes: persisted.sleepTimerMinutes || 0,
+  focusMode: persisted.focusMode || false,
+  bookmarks: persisted.bookmarks || [],
+  globalPronunciations: persisted.globalPronunciations || {},
+  activeBookPronunciations: persisted.activeBookPronunciations || {},
+  bookChapters: [],
+  resumeChunkIndex: 0,
+  replayOnce: false,
+  listenLayoutActive: false,
+  contentsPanelOpen: persisted.contentsPanelOpen ?? false,
 };
 
 const runtime = {
   mode: "idle",
   queue: [],
+  chapters: [],
   currentIndex: -1,
   activeWordRange: null,
   stopRequested: false,
@@ -69,88 +140,449 @@ const runtime = {
 const providers = createProviders(state, runtime);
 const ui = createUi(elements, state, runtime, providers, persistState);
 
+let novel;
+let pdfApi;
+let activeBook = null;
+
+const saveProgressDebounced = debounce(() => saveActiveBookProgress(), 600);
+
 initialize().catch((error) => {
   console.error(error);
   ui.setStatus("Error", error.message, true);
 });
 
 async function initialize() {
+  initThemeManager();
+  initMicroInteractions();
+  initThreeBackground();
   ui.renderProviderPicker(handleProviderSelect);
   ui.renderCredentialsForms();
   ui.hydrateInputs();
   bindEvents();
+  bindContentsToggle();
+
+  state.onChunkChange = (index) => {
+    // NOTE: UI click handlers already set runtime.currentIndex and called renderQueue
+    // before invoking this. We only handle side-effects here to avoid infinite recursion.
+    if (runtime.mode === "playing" || runtime.mode === "paused") {
+      stopPlayback();
+      setTimeout(() => startPlayback(), 50);
+    }
+    state.resumeChunkIndex = index;
+    saveProgressDebounced();
+    persistState(state);
+  };
+
+  state.onChapterJump = async (startChunk) => {
+    const prev = runtime.queue[runtime.currentIndex];
+    const next = runtime.queue[startChunk];
+    if (!next) return;
+    const chapterChanged =
+      prev && (prev.chapterIndex ?? 0) !== (next.chapterIndex ?? 0);
+    goToChunk(startChunk);
+    ui.updateListenContents();
+    refreshPdfListenView(runtime);
+    if (chapterChanged) {
+      await ui.playChapterTransition(next, { completedPrevious: true });
+    }
+    if (runtime.mode === "playing" || runtime.mode === "paused") {
+      stopPlayback();
+      setTimeout(() => startPlayback(), chapterChanged ? 160 : 50);
+    }
+    state.resumeChunkIndex = startChunk;
+    saveProgressDebounced();
+    persistState(state);
+  };
+
+  novel = createNovelFeatures({
+    state,
+    runtime,
+    elements,
+    ui,
+    persistState,
+    stopPlayback,
+    startPlayback,
+    pausePlayback,
+    resumePlayback,
+    goToChunk,
+    saveActiveBookProgress,
+    reloadLibrary: refreshLibrary,
+  });
+  novel.bindControls();
+
+  pdfApi = initFlipbook({
+    onPdfLoaded: (file, url) => {
+      console.log("PDF loaded in flipbook:", file.name);
+      runtime.queue = [];
+      runtime.chapters = [];
+      runtime.currentIndex = -1;
+      setPdfDisplayQueue([]);
+      ui.renderQueue();
+      ui.updateListenContents();
+    },
+    onExtractionProgress: (progress) => {
+      if (!progress.pdfChunks?.length && !progress.fullText?.trim()) {
+        updateLoadProgress({
+          page: progress.pageNumber,
+          totalPages: progress.totalPages,
+          chaptersReady: 0,
+          sectionsReady: 0,
+          done: false,
+        });
+        return;
+      }
+      runtime.queue = buildPdfPlaybackQueue(progress.pdfChunks, {
+        fullText: progress.fullText,
+        pageTexts: progress.pageTexts,
+      });
+      runtime.chapters = buildChapterIndex(runtime.queue);
+      if (runtime.currentIndex < 0 && runtime.queue.length) runtime.currentIndex = 0;
+      setPdfDisplayQueue(runtime.queue);
+      ui.renderQueue();
+      ui.updateListenContents();
+      refreshPdfListenView(runtime);
+      updateLoadProgress({
+        page: progress.pageNumber,
+        totalPages: progress.totalPages,
+        chaptersReady: runtime.chapters.length,
+        sectionsReady: runtime.queue.length,
+        done: progress.done,
+      });
+      if (progress.done) hideLoadProgress();
+    },
+    onTextExtracted: (pdfChunks, meta) => {
+      runtime.queue = buildPdfPlaybackQueue(pdfChunks, meta);
+      runtime.chapters = buildChapterIndex(runtime.queue);
+      if (runtime.currentIndex < 0 && runtime.queue.length) runtime.currentIndex = 0;
+      runtime.currentIndex = Math.min(
+        Math.max(0, state.resumeChunkIndex || meta?.restoreChunk || 0),
+        Math.max(0, runtime.queue.length - 1)
+      );
+      setPdfDisplayQueue(runtime.queue);
+      ui.renderQueue();
+      ui.updateListenContents();
+      refreshPdfListenView(runtime);
+      hideLoadProgress();
+    },
+    onPlayRequested: (chunkIdx) => {
+      runtime.currentIndex = Math.max(0, Math.min(chunkIdx, runtime.queue.length - 1));
+      startPlayback();
+    },
+    onStopRequested: () => stopPlayback(),
+    onPrevRequested: () => {
+      if (runtime.currentIndex > 0) goToChunk(runtime.currentIndex - 1);
+    },
+    onNextRequested: () => {
+      if (runtime.currentIndex < runtime.queue.length - 1) goToChunk(runtime.currentIndex + 1);
+    },
+    onPageFlip: (pageNum) => {
+      console.log("Page flipped to", pageNum);
+    },
+    onStopTts: () => stopPlayback(),
+    onListenLayoutChange: () => ui.updateListenContents(),
+  });
+
   await refreshVoices();
-  ui.updateStats();
-  ui.rebuildQueue();
-  ui.setStatus("Idle", "Browser voices work without any key. Cloud providers need your own account credentials.");
-  // Initialize the standalone PDF book reader
-  initPdfReader(state, runtime, providers, ui);
+  const books = await refreshLibrary();
+
+  if (state.activeBookId) {
+    const book = await loadBook(state.activeBookId);
+    if (book) await openBook(book, { switchTab: false });
+    else clearActiveBookSession({ persist: true });
+  } else if (!books.length && (state.text || state.title)) {
+    clearActiveBookSession({ persist: true });
+  } else {
+    ui.updateStats();
+    ui.rebuildQueue();
+  }
+
+  ui.setTransportState();
+  ui.updateListenContents();
+  ui.setStatus("Ready", "Open a book from Library or paste text in Edit.");
+}
+
+function bindContentsToggle() {
+  const panel = document.getElementById("listen-contents-panel");
+  const collapseBtn = document.getElementById("contents-collapse-btn");
+  const expandBtn = document.getElementById("contents-expand-btn");
+
+  const apply = () => {
+    if (!panel) return;
+    const open = !!state.contentsPanelOpen;
+    panel.classList.toggle("is-collapsed", !open);
+    if (collapseBtn) collapseBtn.hidden = !open;
+    if (expandBtn) expandBtn.hidden = open;
+    collapseBtn?.setAttribute("aria-expanded", open ? "true" : "false");
+    expandBtn?.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+
+  collapseBtn?.addEventListener("click", () => {
+    state.contentsPanelOpen = false;
+    persistState(state);
+    apply();
+  });
+  expandBtn?.addEventListener("click", () => {
+    state.contentsPanelOpen = true;
+    persistState(state);
+    apply();
+  });
+
+  apply();
 }
 
 function bindEvents() {
-  elements.textInput.addEventListener("input", () => {
+  elements.textInput?.addEventListener("input", () => {
     state.text = elements.textInput.value;
-    persistState(state);
     ui.updateStats();
-    ui.rebuildQueue();
+    ui.debouncedRebuild();
   });
 
-  elements.titleInput.addEventListener("input", () => {
+  elements.titleInput?.addEventListener("input", () => {
     state.title = elements.titleInput.value;
     persistState(state);
     ui.updateReaderTitle();
+    if (activeBook) {
+      activeBook.title = state.title;
+      saveBook(activeBook);
+    }
   });
 
-  elements.chunkMode.addEventListener("change", () => {
+  elements.chunkMode?.addEventListener("change", () => {
     state.chunkMode = elements.chunkMode.value;
-    persistState(state);
+    persistState(state, true);
     ui.rebuildQueue();
   });
 
-  elements.rateInput.addEventListener("input", () => {
-    state.rate = Number(elements.rateInput.value);
-    elements.rateOutput.value = `${state.rate.toFixed(2)}x`;
-    persistState(state);
-    if (runtime.currentAudio) runtime.currentAudio.playbackRate = state.rate;
-    if (runtime.currentUtterance) runtime.currentUtterance.rate = state.rate;
-  });
-
-  elements.pitchInput.addEventListener("input", () => {
-    state.pitch = Number(elements.pitchInput.value);
-    elements.pitchOutput.value = `${state.pitch.toFixed(2)}x`;
-    persistState(state);
-    if (runtime.currentUtterance) runtime.currentUtterance.pitch = state.pitch;
-  });
-
-  elements.volumeInput.addEventListener("input", () => {
-    state.volume = Number(elements.volumeInput.value);
-    elements.volumeOutput.value = `${Math.round(state.volume * 100)}%`;
-    persistState(state);
-    if (runtime.currentAudio) runtime.currentAudio.volume = state.volume;
-    if (runtime.currentUtterance) runtime.currentUtterance.volume = state.volume;
-  });
-
-  elements.voiceSelect.addEventListener("change", () => {
+  elements.rateInput?.addEventListener("input", onRateChange);
+  elements.pitchInput?.addEventListener("input", onPitchChange);
+  elements.volumeInput?.addEventListener("input", onVolumeChange);
+  elements.voiceSelect?.addEventListener("change", () => {
     state.voiceId = elements.voiceSelect.value;
     persistState(state);
   });
 
-  elements.playButton.addEventListener("click", startPlayback);
-  elements.pauseButton.addEventListener("click", pausePlayback);
-  elements.resumeButton.addEventListener("click", resumePlayback);
-  elements.stopButton.addEventListener("click", stopPlayback);
-  elements.downloadButton.addEventListener("click", downloadAudio);
-  elements.refreshVoices.addEventListener("click", () => refreshVoices(true));
-  elements.saveCredentials.addEventListener("click", saveCredentialInputs);
-  elements.sampleButton.addEventListener("click", loadSampleText);
-  elements.clearButton.addEventListener("click", clearDocument);
-  elements.fileInput.addEventListener("change", importTextFile);
+  elements.playButton?.addEventListener("click", startPlayback);
+  elements.pauseButton?.addEventListener("click", pausePlayback);
+  elements.resumeButton?.addEventListener("click", resumePlayback);
+  elements.stopButton?.addEventListener("click", stopPlayback);
+  elements.downloadButton?.addEventListener("click", downloadAudio);
+  elements.downloadChapterBtn?.addEventListener("click", downloadCurrentChapter);
+  elements.refreshVoices?.addEventListener("click", () => refreshVoices(true));
+  elements.saveCredentials?.addEventListener("click", saveCredentialInputs);
+  elements.sampleButton?.addEventListener("click", loadSampleText);
+  elements.clearButton?.addEventListener("click", clearDocument);
+  elements.fileInput?.addEventListener("change", importTextFile);
+
+  elements.libraryTxtInput?.addEventListener("change", (e) => importToLibrary(e, "txt"));
+  elements.libraryEpubInput?.addEventListener("change", (e) => importToLibrary(e, "epub"));
+  elements.libraryPdfInput?.addEventListener("change", (e) => importToLibrary(e, "pdf"));
+  elements.libraryUrlBtn?.addEventListener("click", importUrlToLibrary);
+  elements.bookStartBtn?.addEventListener("click", () => {
+    state.listenLayoutActive = true;
+    ui.updateListenContents();
+    goToChunk(0);
+    startPlayback();
+  });
+  elements.bookContinueBtn?.addEventListener("click", () => {
+    state.listenLayoutActive = true;
+    ui.updateListenContents();
+    startPlayback();
+  });
+}
+
+async function importToLibrary(event, type) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  event.target.value = "";
+  try {
+    ui.setStatus("Loading", `Adding ${file.name}…`);
+    let book;
+    if (type === "epub") book = await importEpubFile(file);
+    else if (type === "pdf") book = await importPdfFile(file);
+    else book = await importTxtFile(file);
+    await refreshLibrary();
+    await openBook(book);
+    ui.setStatus("Ready", `Added “${book.title}”.`);
+  } catch (err) {
+    ui.setStatus("Error", err.message, true);
+  }
+}
+
+async function importUrlToLibrary() {
+  const url = prompt("Paste a link to plain text or HTML:");
+  if (!url) return;
+  try {
+    ui.setStatus("Loading", "Fetching…");
+    const book = await importFromUrl(url);
+    await refreshLibrary();
+    await openBook(book);
+  } catch (err) {
+    ui.setStatus("Error", err.message, true);
+  }
+}
+
+async function refreshLibrary() {
+  const books = await listBooks();
+  for (const b of books) {
+    if (b.text) {
+      const { buildChunks } = await import("./queue.js");
+      b.totalChunks = buildChunks(b.text, state.chunkMode, { useChapters: true }).length;
+    } else if (b.type === "pdf") {
+      b.totalChunks = b.progress?.pageCount || 0;
+    }
+  }
+  ui.renderLibrary(books, {
+    onOpen: (book) => openBook(book),
+    onReimport: () => {
+      ui.setStatus("Loading", "Choose the EPUB file again to rebuild this reader.");
+      elements.libraryEpubInput?.click();
+    },
+    onDelete: async (book) => {
+      const deletingActiveBook = state.activeBookId === book.id;
+      if (deletingActiveBook) stopPlayback({ silent: true });
+      await removeBook(book.id);
+      if (deletingActiveBook) clearActiveBookSession({ persist: true });
+      await refreshLibrary();
+      if (deletingActiveBook) ui.setStatus("Removed", "That book was deleted completely from this browser.");
+    },
+  });
+  return books;
+}
+
+async function openBook(book, { switchTab = true } = {}) {
+  if (book.type === "epub" && !book.text && book.epubBlob) {
+    ui.setStatus("Loading", `Rebuilding "${book.title}" from EPUB...`);
+    const rebuilt = await import("./epub.js").then((m) => m.extractTextFromEpub(book.epubBlob));
+    book = {
+      ...book,
+      title: rebuilt.title || book.title,
+      author: rebuilt.author || book.author || "",
+      chapters: rebuilt.chapters || [],
+      text: rebuilt.text || "",
+    };
+    await saveBook(book);
+  }
+  if (book.type === "epub" && !book.text) {
+    ui.setStatus("Error", "This EPUB was imported before readable text was stored. Delete it and add the EPUB again.", true);
+    return;
+  }
+
+  activeBook = book;
+  state.activeBookId = book.id;
+  state.title = book.title;
+  state.bookChapters = Array.isArray(book.chapters) ? book.chapters : [];
+  state.bookmarks = book.bookmarks || [];
+  state.activeBookPronunciations = book.pronunciations || {};
+  state.resumeChunkIndex = book.progress?.chunkIndex ?? 0;
+  book.lastOpenedAt = Date.now();
+
+  if (book.type === "pdf" && book.pdfBlob) {
+    state.listenLayoutActive = false;
+    runtime.chapters = [];
+    runtime.queue = [];
+    await saveBook(book);
+    persistState(state, true);
+    if (switchTab) window.switchTab?.("pdfreader");
+    await pdfApi?.loadPdfBlob(book.pdfBlob, book, { activateTab: switchTab });
+    return;
+  }
+
+  state.text = book.text || "";
+  elements.textInput.value = state.text;
+  elements.titleInput.value = state.title;
+  runtime.currentIndex = state.resumeChunkIndex;
+  if (elements.pronunciationInput) {
+    const { dictToLines } = await import("./pronunciation.js");
+    elements.pronunciationInput.value = dictToLines(state.activeBookPronunciations);
+  }
+
+  ui.rebuildQueue();
+  runtime.currentIndex = Math.min(state.resumeChunkIndex, runtime.queue.length - 1);
+  ui.renderQueue(true);
+  ui.renderBookExperience(book, {
+    onChapter: (chunkIndex) => goToChunk(chunkIndex),
+  });
+  await saveBook(book);
+  persistState(state, true);
+
+  if (switchTab) window.switchTab?.("player");
+  state.listenLayoutActive = state.resumeChunkIndex > 0;
+  ui.updateListenContents();
+  ui.setStatus("Ready", `Continue “${book.title}” from section ${runtime.currentIndex + 1}.`);
+}
+
+async function saveActiveBookProgress() {
+  if (!activeBook || activeBook.type === "pdf") return;
+  activeBook.progress = {
+    chunkIndex: runtime.currentIndex,
+    chapterIndex: runtime.queue[runtime.currentIndex]?.chapterIndex ?? 0,
+  };
+  activeBook.bookmarks = state.bookmarks;
+  activeBook.pronunciations = state.activeBookPronunciations;
+  activeBook.totalChunks = runtime.queue.length;
+  await saveBook(activeBook);
+  await refreshLibrary();
+}
+
+function savePdfBookProgress(progress) {
+  if (!activeBook) return;
+  activeBook.progress = { ...activeBook.progress, ...progress };
+  saveBook(activeBook);
+}
+
+function goToChunk(index) {
+  if (index < 0 || index >= runtime.queue.length) return;
+  runtime.currentIndex = index;
+  runtime.activeWordRange = null;
+  ui.renderQueue(true);
+  syncFlipbookToChunk(index, runtime);
+  refreshPdfListenView(runtime);
+  ui.updateListenContents();
+  // NOTE: Do NOT call state.onChunkChange here — it calls goToChunk, causing infinite recursion.
+  // Callers that need side-effects (stop/restart playback) must handle them directly.
+}
+
+function buildPdfPlaybackQueue(pdfChunks, meta) {
+  const fullText =
+    meta?.fullText?.trim() ||
+    pdfChunks.map((c) => c.text).join("\n\n").trim();
+  if (!fullText) {
+    return pdfChunks.map((chunk, index) => ({
+      ...chunk,
+      id: index,
+      chunkIndex: index,
+      chapterIndex: chunk.pageIndex ?? 0,
+      chapterTitle: `Page ${(chunk.pageIndex ?? 0) + 1}`,
+      source: "pdf",
+    }));
+  }
+
+  const pageTexts = meta?.pageTexts || [];
+  const built = buildChunks(fullText, "novel", { useChapters: true });
+
+  return built.map((chunk, index) => ({
+    ...chunk,
+    id: index,
+    chunkIndex: index,
+    pageIndex: findPageIndexForChunk(chunk.text, pageTexts),
+    source: "pdf",
+  }));
+}
+
+function findPageIndexForChunk(text, pageTexts) {
+  if (!pageTexts.length || !text) return 0;
+  const needle = text.slice(0, 64).trim();
+  if (!needle) return 0;
+  for (let p = 0; p < pageTexts.length; p += 1) {
+    if (pageTexts[p]?.includes(needle)) return p;
+  }
+  return 0;
 }
 
 async function handleProviderSelect(providerId) {
   state.provider = providerId;
   state.voiceId = "";
-  persistState(state);
+  persistState(state, true);
   ui.renderProviderPicker(handleProviderSelect);
   await refreshVoices();
 }
@@ -162,80 +594,91 @@ function saveCredentialInputs() {
     state.credentials[providerId] = state.credentials[providerId] || {};
     state.credentials[providerId][key] = input.value.trim();
   });
-  persistState(state);
-  ui.setStatus(
-    "Saved",
-    "Credentials saved in this browser only. For personal use this is fine; for production use a backend proxy instead of exposing keys in the client."
-  );
+  persistState(state, true);
+  ui.setStatus("Saved", "Credentials saved in this browser only.");
 }
 
 async function refreshVoices(forceRefresh) {
   const provider = providers[state.provider];
   try {
-    ui.setStatus("Loading", `Loading ${provider.label} voices...`);
+    ui.setStatus("Loading", `Loading ${provider.label} voices…`);
     const voices = await provider.listVoices(forceRefresh);
-    if (state.provider === "native" || state.provider === "openai" || state.provider === "googleTranslate") {
-      state.cachedVoices[state.provider] = { expire: Date.now() + 24 * 60 * 60 * 1000, items: voices };
+    if (["native", "openai", "googleTranslate"].includes(state.provider)) {
+      state.cachedVoices[state.provider] = {
+        expire: Date.now() + 86400000,
+        items: voices,
+      };
     }
     ui.populateVoiceSelect(voices);
     persistState(state);
-    ui.setStatus("Ready", `${voices.length} ${provider.label} voices available.`);
+    ui.setStatus("Ready", `${voices.length} voices ready.`);
   } catch (error) {
     ui.populateVoiceSelect([]);
     ui.setStatus("Error", error.message, true);
-    throw error;
   }
 }
 
 function loadSampleText() {
-  state.title = "A quieter way to read the web";
-  state.text = [
-    "Read Aloud Web is designed as a calm text-to-speech workspace instead of a browser popup. Paste an article, a study note, a script, or your own writing and listen without the extension-only constraints.",
-    "Browser voices work immediately with no account setup. Cloud providers need your own keys because those voices are billed and managed by the provider, not bundled inside this app.",
-    "For a personal setup, entering your own keys in the browser is acceptable. For anything shared publicly, those keys should move behind your own backend so they never leak to other users.",
-  ].join("\n\n");
+  state.title = "Sample novel excerpt";
+  state.text =
+    "अध्याय 1\n\nयह एक शांत सुबह थी। हवा में मीठी खुशबू थी।\n\nअध्याय 2\n\nदोपहर तक आसमान बादलों से भर गया।";
   elements.titleInput.value = state.title;
   elements.textInput.value = state.text;
-  persistState(state);
   ui.updateStats();
   ui.rebuildQueue();
+  persistState(state);
 }
 
 function clearDocument() {
   stopPlayback();
-  state.title = "";
   state.text = "";
-  elements.titleInput.value = "";
+  state.title = "";
   elements.textInput.value = "";
-  persistState(state);
+  elements.titleInput.value = "";
   ui.updateStats();
   ui.rebuildQueue();
-  ui.setStatus("Idle", "Document cleared. Paste text, import a TXT, or import a PDF.");
+  persistState(state);
 }
 
 async function importTextFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  state.text = await file.text();
-  state.title = state.title || file.name.replace(/\.[^.]+$/, "");
-  elements.textInput.value = state.text;
-  elements.titleInput.value = state.title;
-  persistState(state);
-  ui.updateStats();
-  ui.rebuildQueue();
-  ui.setStatus("Ready", `Imported text file: ${file.name}`);
+  const book = await importTxtFile(file);
+  await refreshLibrary();
+  await openBook(book);
   event.target.value = "";
 }
 
+function onRateChange() {
+  state.rate = Number(elements.rateInput.value);
+  elements.rateOutput.value = `${state.rate.toFixed(2)}×`;
+  persistState(state);
+  if (runtime.currentAudio) runtime.currentAudio.playbackRate = novel.effectiveRate();
+}
 
+function onPitchChange() {
+  state.pitch = Number(elements.pitchInput.value);
+  elements.pitchOutput.value = `${state.pitch.toFixed(2)}×`;
+  persistState(state);
+  if (runtime.currentUtterance) runtime.currentUtterance.pitch = state.pitch;
+}
+
+function onVolumeChange() {
+  state.volume = Number(elements.volumeInput.value);
+  elements.volumeOutput.value = `${Math.round(state.volume * 100)}%`;
+  persistState(state);
+  if (runtime.currentAudio) runtime.currentAudio.volume = state.volume;
+}
 
 async function startPlayback() {
   if (!runtime.queue.length) {
-    ui.setStatus("Error", "There is no text to read yet.", true);
+    ui.setStatus("Error", "Open a book from Library first.", true);
     return;
   }
+  state.listenLayoutActive = true;
+  ui.updateListenContents();
   if (!state.voiceId) {
-    ui.setStatus("Error", "Choose a voice before starting playback.", true);
+    ui.setStatus("Error", "Choose a voice in Voice tab.", true);
     return;
   }
   if (runtime.mode === "playing") return;
@@ -243,14 +686,14 @@ async function startPlayback() {
   runtime.stopRequested = false;
   runtime.paused = false;
   runtime.mode = "playing";
-  if (runtime.currentIndex < 0 || runtime.currentIndex >= runtime.queue.length) runtime.currentIndex = 0;
+  if (runtime.currentIndex < 0) runtime.currentIndex = state.resumeChunkIndex || 0;
+
+  document.getElementById("mini-player")?.classList.add("is-playing");
 
   ui.setTransportState();
-  ui.setStatus("Playing", "Starting playback...");
-
   try {
     await playQueueFromCurrentIndex();
-    if (!runtime.stopRequested) ui.setStatus("Finished", "Playback reached the end of the queue.");
+    if (!runtime.stopRequested) ui.setStatus("Finished", "End of book.");
   } catch (error) {
     ui.setStatus("Error", error.message, true);
   } finally {
@@ -258,48 +701,124 @@ async function startPlayback() {
     runtime.paused = false;
     releaseAudioResources(runtime);
     ui.setTransportState();
-    ui.renderQueue();
+    ui.renderQueue(false);
+    flushPersist(state);
+    document.getElementById("mini-player")?.classList.remove("is-playing");
   }
 }
 
 async function playQueueFromCurrentIndex() {
   while (runtime.currentIndex >= 0 && runtime.currentIndex < runtime.queue.length) {
     if (runtime.stopRequested) return;
+
+    const prevChunk =
+      runtime.currentIndex > 0 ? runtime.queue[runtime.currentIndex - 1] : null;
+    const raw = runtime.queue[runtime.currentIndex];
+    if (
+      prevChunk &&
+      (prevChunk.chapterIndex ?? 0) !== (raw.chapterIndex ?? 0)
+    ) {
+      await ui.playChapterTransition(raw, { completedPrevious: true });
+    }
+    if (
+      state.sleepTimerMinutes === "chapter" &&
+      runtime.currentIndex > (state.resumeChunkIndex || 0) &&
+      raw.chapterIndex !== runtime.queue[runtime.currentIndex - 1]?.chapterIndex
+    ) {
+      stopPlayback();
+      ui.setStatus("Stopped", "Sleep timer stopped at the next chapter.");
+      return;
+    }
+    if (novel.shouldSkipChunk(raw)) {
+      runtime.currentIndex += 1;
+      continue;
+    }
+
     const provider = providers[state.provider];
-    const voice = getActiveVoices().find((item) => item.id === state.voiceId);
-    if (!voice) throw new Error("The selected voice is no longer available. Refresh the voice list and try again.");
+    const voice = pickVoice(raw);
+    if (!voice) throw new Error("Voice not available. Refresh voices.");
 
-    ui.renderQueue();
+    ui.renderQueue(false);
     ui.updateReaderProgress();
-    ui.setStatus("Playing", `Reading chunk ${runtime.currentIndex + 1} of ${runtime.queue.length} with ${provider.label}.`);
 
-    await provider.speak(runtime.queue[runtime.currentIndex], voice, {
-      rate: state.rate,
-      pitch: state.pitch,
-      volume: state.volume,
-      onStart: () => {
-        runtime.mode = "playing";
-        ui.setTransportState();
-      },
-      onBoundary: (start, end) => {
-        runtime.activeWordRange = { chunkIndex: runtime.currentIndex, start, end };
-        ui.updateReaderPreview();
-      },
-    });
+    const chunk = { ...raw, text: novel.prepareChunkText(raw) };
+    const replay = state.replayOnce;
+    state.replayOnce = false;
+    
+    syncFlipbookToChunk(runtime.currentIndex, runtime);
+
+    do {
+      await provider.speak(chunk, voice, {
+        rate: novel.effectiveRate(),
+        pitch: state.pitch,
+        volume: state.volume,
+        onStart: () => {
+          runtime.mode = "playing";
+          updateMediaSession(raw);
+          ui.setTransportState();
+        },
+        onBoundary: (start, end) => {
+          runtime.activeWordRange = { chunkIndex: runtime.currentIndex, start, end };
+          ui.updateReaderPreview();
+          refreshPdfListenView(runtime);
+        },
+      });
+      if (replay && !runtime.stopRequested) continue;
+      break;
+    } while (replay);
 
     runtime.activeWordRange = null;
+    if (runtime.stopRequested) return;
+
     runtime.currentIndex += 1;
-    ui.renderQueue();
+    if (raw.source === "pdf") {
+      const nextPdfChunk = runtime.queue[runtime.currentIndex];
+      const prevChapter = raw.chapterIndex ?? 0;
+      const nextChapter = nextPdfChunk?.chapterIndex ?? prevChapter;
+      if (nextPdfChunk && nextChapter !== prevChapter) {
+        onChapterAudioDone(nextChapter, runtime);
+      } else if (!nextPdfChunk) {
+        onPageAudioDone((raw.pageIndex ?? 0) + 1);
+      }
+      savePdfBookProgress({
+        chunkIndex: runtime.currentIndex,
+        chapterIndex: prevChapter,
+        pageCount: Math.max(activeBook?.progress?.pageCount || 0, (raw.pageIndex ?? 0) + 1),
+      });
+    }
+    // NOTE: Do NOT call state.onChunkChange during playback — it triggers stopPlayback()+startPlayback()
+    // and an expensive refreshLibrary() call on every single chunk.
+    ui.renderQueue(false);
   }
+}
+
+function updateMediaSession(chunk) {
+  if (!("mediaSession" in navigator)) return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: chunk?.chapterTitle || state.title || "Read Aloud",
+    artist: state.title || "Novel Reader",
+    album: "Read Aloud",
+  });
+  navigator.mediaSession.playbackState = runtime.mode === "playing" ? "playing" : "paused";
+}
+
+function pickVoice(chunk) {
+  const voices = getActiveVoices();
+  const dialogueId = state.dialogueVoiceId;
+  if (chunk?.isDialogue && dialogueId) {
+    return voices.find((v) => v.id === dialogueId) || voices.find((v) => v.id === state.voiceId);
+  }
+  return voices.find((v) => v.id === state.voiceId);
 }
 
 function pausePlayback() {
   if (runtime.mode !== "playing") return;
   runtime.paused = true;
   runtime.mode = "paused";
-  if (runtime.currentAudio) runtime.currentAudio.pause();
-  if (runtime.currentUtterance) speechSynthesis.pause();
-  ui.setStatus("Paused", "Playback paused.");
+  runtime.currentAudio?.pause();
+  speechSynthesis.pause();
+  document.getElementById("mini-player")?.classList.remove("is-playing");
+  ui.setStatus("Paused", "Space to resume.");
   ui.setTransportState();
 }
 
@@ -307,100 +826,121 @@ function resumePlayback() {
   if (runtime.mode !== "paused") return;
   runtime.paused = false;
   runtime.mode = "playing";
-  if (runtime.currentAudio) runtime.currentAudio.play().catch((error) => ui.setStatus("Error", error.message, true));
-  if (runtime.currentUtterance) speechSynthesis.resume();
-  ui.setStatus("Playing", "Playback resumed.");
+  runtime.currentAudio?.play().catch(() => {});
+  speechSynthesis.resume();
+  document.getElementById("mini-player")?.classList.add("is-playing");
+  ui.setStatus("Playing", "Resumed.");
   ui.setTransportState();
 }
 
-function stopPlayback() {
+function stopPlayback(options = {}) {
   runtime.stopRequested = true;
   runtime.paused = false;
   runtime.mode = "idle";
   runtime.activeWordRange = null;
-  if (runtime.currentAudio) runtime.currentAudio.pause();
-  if (runtime.currentUtterance) speechSynthesis.cancel();
+  runtime.currentAudio?.pause();
+  speechSynthesis.cancel();
   releaseAudioResources(runtime);
+  novel?.clearSleepTimer?.();
+  document.getElementById("mini-player")?.classList.remove("is-playing");
   ui.setTransportState();
   ui.updateReaderPreview();
-  if (runtime.queue.length) ui.renderQueue();
-  ui.setStatus("Stopped", "Playback stopped.");
+  refreshPdfListenView(runtime);
+  ui.renderQueue(false);
+  if (!options.silent) ui.setStatus("Stopped", "Playback stopped.");
+  saveActiveBookProgress();
+}
+
+function clearActiveBookSession({ persist = false } = {}) {
+  activeBook = null;
+  state.activeBookId = "";
+  state.text = "";
+  state.title = "";
+  state.bookmarks = [];
+  state.activeBookPronunciations = {};
+  state.bookChapters = [];
+  state.resumeChunkIndex = 0;
+  state.listenLayoutActive = false;
+  runtime.queue = [];
+  runtime.chapters = [];
+  runtime.currentIndex = -1;
+  runtime.activeWordRange = null;
+  if (elements.textInput) elements.textInput.value = "";
+  if (elements.titleInput) elements.titleInput.value = "";
+  if (elements.pronunciationInput) elements.pronunciationInput.value = "";
+  ui.updateStats();
+  ui.rebuildQueue();
+  ui.renderBookmarks();
+  ui.updateReaderTitle();
+  ui.updateReaderProgress();
+  ui.updateReaderPreview();
+  ui.renderBookExperience(null);
+  ui.setTransportState();
+  persistState(state, persist);
 }
 
 function getActiveVoices() {
-  const possibleKeys = [
-    state.provider,
-    ...Object.keys(state.cachedVoices).filter((key) => key.startsWith(`${state.provider}:`)),
-  ];
-  for (const key of possibleKeys) {
-    const entry = state.cachedVoices[key];
-    if (Array.isArray(entry?.items)) return entry.items;
-  }
-  return [];
+  const entry = state.cachedVoices[state.provider];
+  return entry?.items ?? [];
 }
 
 async function downloadAudio() {
-  if (!runtime.queue.length) {
-    ui.setStatus("Error", "There is no text to download yet.", true);
+  if (!runtime.queue.length || !state.voiceId) {
+    ui.setStatus("Error", "Need text and voice.", true);
     return;
   }
-  if (!state.voiceId) {
-    ui.setStatus("Error", "Choose a voice before downloading.", true);
-    return;
-  }
-  
   if (state.provider !== "googleTranslate") {
-    ui.setStatus("Error", "Downloading is currently only supported for Google Translate.", true);
+    ui.setStatus("Error", "Full download works with Google Translate.", true);
     return;
   }
-
-  ui.setStatus("Loading", "Generating audio for download. Please wait...");
-  
-  try {
-    const voice = getActiveVoices().find((item) => item.id === state.voiceId);
-    let allBlobs = [];
-    
-    for (let j = 0; j < runtime.queue.length; j++) {
-      const chunk = runtime.queue[j];
-      const words = chunk.text.split(/\s+/);
-      const subChunks = [];
-      let current = "";
-      for (const word of words) {
-        if ((current + " " + word).length > 180) {
-          if (current) subChunks.push(current.trim());
-          current = word;
-        } else {
-          current += (current ? " " : "") + word;
-        }
-      }
-      if (current) subChunks.push(current.trim());
-
-      for (let i = 0; i < subChunks.length; i++) {
-        ui.setStatus("Loading", `Generating chunk ${j + 1}/${runtime.queue.length} (sub-part ${i + 1}/${subChunks.length})...`);
-        const response = await fetch("/api/google-translate/speak", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: subChunks[i],
-            lang: voice.lang,
-          }),
-        });
-        if (!response.ok) throw new Error("Synthesis failed");
-        allBlobs.push(await response.blob());
-      }
-    }
-    
-    ui.setStatus("Loading", "Stitching audio together...");
-    const finalBlob = new Blob(allBlobs, { type: "audio/mpeg" });
-    const url = URL.createObjectURL(finalBlob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = (state.title || "read_aloud_audio").replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".mp3";
-    a.click();
-    URL.revokeObjectURL(url);
-    
-    ui.setStatus("Ready", "Audio downloaded successfully.");
-  } catch (err) {
-    ui.setStatus("Error", "Failed to download audio: " + err.message, true);
-  }
+  await downloadChunks(runtime.queue, state.title || "novel");
 }
+
+async function downloadCurrentChapter() {
+  const ch = runtime.chapters?.find(
+    (c) => c.chapterIndex === (runtime.queue[runtime.currentIndex]?.chapterIndex ?? 0)
+  );
+  if (!ch) return downloadAudio();
+  const slice = runtime.queue.slice(ch.startChunk, ch.endChunk + 1);
+  await downloadChunks(slice, `${state.title || "novel"}-ch`);
+}
+
+async function downloadChunks(chunks, name) {
+  const voice = getActiveVoices().find((v) => v.id === state.voiceId);
+  ui.setStatus("Loading", "Generating audio…");
+  const blobs = [];
+  for (let j = 0; j < chunks.length; j++) {
+    const text = novel.prepareChunkText(chunks[j]);
+    const subs = splitForGt(text);
+    for (const sub of subs) {
+      const res = await fetch("/api/google-translate/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: sub, lang: voice.lang }),
+      });
+      if (res.ok) blobs.push(await res.blob());
+    }
+  }
+  const url = URL.createObjectURL(new Blob(blobs, { type: "audio/mpeg" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${name.replace(/[^a-z0-9]+/gi, "_")}.mp3`;
+  a.click();
+  URL.revokeObjectURL(url);
+  ui.setStatus("Ready", "Download started.");
+}
+
+function splitForGt(text) {
+  const words = text.split(/\s+/);
+  const parts = [];
+  let cur = "";
+  for (const w of words) {
+    if ((cur + " " + w).length > 180) {
+      if (cur) parts.push(cur.trim());
+      cur = w;
+    } else cur += (cur ? " " : "") + w;
+  }
+  if (cur) parts.push(cur.trim());
+  return parts;
+}
+

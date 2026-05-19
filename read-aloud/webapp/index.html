@@ -3,21 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Read Aloud — Hindi TTS</title>
+  <title>Read Aloud — Novel Reader</title>
   <meta name="description" content="Text-to-speech web app with Google Translate Hindi voice support.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/webapp/styles.css">
+  <link rel="stylesheet" href="/webapp/css/animations.css">
+  <!-- DearFlip Flipbook -->
+  <link rel="stylesheet" href="/webapp/dflip/css/dflip.min.css">
+  <link rel="stylesheet" href="/webapp/dflip/css/themify-icons.min.css">
 </head>
 <body>
-
-  <!-- Decorative aurora mesh (visual only) -->
-  <div class="aurora-layer" aria-hidden="true">
-    <span class="aurora-blob aurora-blob--1"></span>
-    <span class="aurora-blob aurora-blob--2"></span>
-    <span class="aurora-blob aurora-blob--3"></span>
-  </div>
+  <!-- 3D WebGL Background Canvas -->
+  <canvas id="three-canvas" class="three-canvas" style="position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0; transition: opacity 2s ease; background: var(--bg-void);"></canvas>
 
   <!-- SIDEBAR NAV -->
   <nav class="sidebar" role="navigation" aria-label="App sections">
@@ -28,15 +27,27 @@
       </div>
       <div>
         <strong>Read Aloud</strong>
-        <span>Hindi TTS</span>
+        <span>Novel Reader</span>
       </div>
     </div>
 
     <ul class="sidebar-nav">
       <li>
-        <button class="nav-btn is-active" data-tab="compose" type="button" aria-selected="true">
+        <button class="nav-btn is-active" data-tab="library" type="button" aria-selected="true">
+          <span class="nav-icon">📚</span>
+          <span class="nav-label">Library</span>
+        </button>
+      </li>
+      <li>
+        <button class="nav-btn" data-tab="player" type="button" aria-selected="false">
+          <span class="nav-icon">▶️</span>
+          <span class="nav-label">Listen</span>
+        </button>
+      </li>
+      <li>
+        <button class="nav-btn" data-tab="compose" type="button" aria-selected="false">
           <span class="nav-icon">✏️</span>
-          <span class="nav-label">Compose</span>
+          <span class="nav-label">Edit Text</span>
         </button>
       </li>
       <li>
@@ -46,17 +57,21 @@
         </button>
       </li>
       <li>
-        <button class="nav-btn" data-tab="player" type="button" aria-selected="false">
-          <span class="nav-icon">▶️</span>
-          <span class="nav-label">Player</span>
-        </button>
-      </li>
-      <li>
         <button class="nav-btn" data-tab="pdfreader" type="button" aria-selected="false">
           <span class="nav-icon">📖</span>
           <span class="nav-label">PDF Reader</span>
           <span class="nav-badge" id="pdf-reader-badge" style="display:none">NEW</span>
         </button>
+      </li>
+      
+      <!-- Theme Switcher -->
+      <li class="theme-switcher-nav">
+        <label for="theme-select" class="nav-label" style="display:none;">Theme</label>
+        <select id="theme-select" class="theme-select">
+          <option value="theme-midnight">🌙 Midnight</option>
+          <option value="theme-sepia">📜 Sepia</option>
+          <option value="theme-light">☀️ Light</option>
+        </select>
       </li>
       <li>
         <button class="nav-btn" data-tab="settings" type="button" aria-selected="false">
@@ -69,6 +84,11 @@
     <!-- Mini Player — always visible -->
     <div class="mini-player" id="mini-player">
       <div class="mini-player-progress" aria-hidden="true"></div>
+      <div class="mini-player-waveform" id="mini-waveform" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
       <div class="mini-player-title">
         <span id="mini-title">No document loaded</span>
       </div>
@@ -88,8 +108,31 @@
   <!-- MAIN CONTENT -->
   <div class="app-content">
 
+    <!-- ====== TAB: LIBRARY ====== -->
+    <section class="tab-pane is-active" id="tab-library">
+      <div class="page-header">
+        <div>
+          <p class="page-kicker">Your novels</p>
+          <h1>Library</h1>
+          <p class="page-desc">Add a book once — always resume where you left off.</p>
+        </div>
+      </div>
+
+      <div class="library-add-row">
+        <label class="btn btn-primary" for="library-txt-input">📄 Add TXT</label>
+        <input id="library-txt-input" type="file" accept=".txt,text/plain" hidden>
+        <label class="btn btn-primary" for="library-epub-input">📘 Add EPUB</label>
+        <input id="library-epub-input" type="file" accept=".epub,application/epub+zip" hidden>
+        <label class="btn btn-primary" for="library-pdf-input">📑 Add PDF</label>
+        <input id="library-pdf-input" type="file" accept="application/pdf,.pdf" hidden>
+        <button type="button" class="btn btn-outline" id="library-url-btn">🔗 From URL</button>
+      </div>
+
+      <div id="library-grid" class="library-grid-wrap"></div>
+    </section>
+
     <!-- ====== TAB: COMPOSE ====== -->
-    <section class="tab-pane is-active" id="tab-compose">
+    <section class="tab-pane" id="tab-compose">
       <div class="page-header">
         <div>
           <p class="page-kicker">Step 1</p>
@@ -170,8 +213,12 @@
         <div class="section-card">
           <h2 class="section-title">Voice</h2>
           <div class="field">
-            <label class="field-label" for="voice-select">Available voices</label>
+            <label class="field-label" for="voice-select">Narrator voice</label>
             <select id="voice-select"></select>
+          </div>
+          <div class="field" style="margin-top:12px">
+            <label class="field-label" for="dialogue-voice-select">Dialogue voice</label>
+            <select id="dialogue-voice-select"></select>
           </div>
         </div>
         <div class="section-card">
@@ -179,7 +226,8 @@
           <div class="field">
             <label class="field-label" for="chunk-mode">How to split the text</label>
             <select id="chunk-mode">
-              <option value="balanced">Balanced chunks (recommended)</option>
+              <option value="novel">Novel — chapters &amp; paragraphs (recommended)</option>
+              <option value="balanced">Balanced chunks</option>
               <option value="paragraphs">Whole paragraphs</option>
               <option value="sentences">Short sentences</option>
             </select>
@@ -223,119 +271,232 @@
 
     <!-- ====== TAB: PLAYER ====== -->
     <section class="tab-pane" id="tab-player">
-      <div class="page-header">
-        <div>
-          <p class="page-kicker">Step 3</p>
-          <h1>Player</h1>
-          <p class="page-desc">Play, pause, and follow along with your text as it's read aloud.</p>
-        </div>
-        <button id="download-button" class="btn btn-outline" type="button">⬇ Download MP3</button>
-      </div>
+      <div class="player-layout">
 
-      <!-- Now Reading -->
-      <div class="now-reading-card">
-        <div class="now-reading-meta">
-          <span id="reader-title" class="now-reading-title">Untitled session</span>
-          <span id="reader-progress" class="now-reading-progress">0 / 0</span>
-        </div>
-        <div id="reader-preview" class="reader-preview empty">
-          Hit Play to start. The current chunk will appear here.
-        </div>
-      </div>
+        <!-- LEFT: Immersive Reader Canvas -->
+        <div class="player-reader-col">
+          <div class="player-reader-inner">
 
-      <!-- Status -->
-      <div class="status-card" id="status-card">
-        <div class="status-left">
-          <span class="status-dot" id="status-dot"></span>
-          <div>
-            <strong id="playback-status">Idle</strong>
-            <p id="status-message">Choose a voice in Voice & Playback, then hit Play.</p>
+          <aside class="listen-contents-panel is-collapsed" id="listen-contents-panel" hidden aria-label="Chapter contents">
+            <button type="button" class="contents-expand-btn" id="contents-expand-btn" title="Show contents" aria-label="Show contents">+</button>
+            <div class="listen-contents-body">
+              <div class="book-toc-head">
+                <span>Contents</span>
+                <div class="book-toc-head-actions">
+                  <strong id="player-listen-toc-count">0</strong>
+                  <button type="button" class="contents-collapse-btn" id="contents-collapse-btn" title="Hide contents" aria-label="Hide contents" hidden>−</button>
+                </div>
+              </div>
+              <div id="player-listen-toc-list" class="book-toc-list"></div>
+            </div>
+          </aside>
+
+          <div class="player-reading-main">
+
+          <!-- Book cover splash (shown on first load) -->
+          <div class="book-experience" id="book-experience" hidden>
+            <div class="book-experience-main">
+              <p class="book-kicker" id="book-experience-type">Imported book</p>
+              <h2 id="book-experience-title">Untitled</h2>
+              <p id="book-experience-author" class="book-author"></p>
+              <div class="book-stats" id="book-experience-stats"></div>
+              <div class="book-actions">
+                <button type="button" class="btn btn-primary" id="book-start-btn">Begin</button>
+                <button type="button" class="btn btn-outline" id="book-continue-btn">Continue</button>
+              </div>
+            </div>
           </div>
+
+          <!-- THE BOOK PAGE -->
+          <div class="now-reading-card">
+            <div class="now-reading-meta">
+              <span id="reader-title" class="now-reading-title">Untitled session</span>
+              <span id="reader-progress" class="now-reading-progress">0 / 0</span>
+            </div>
+            <div id="reader-preview" class="reader-preview empty">
+              Open a book from Library and press Play to begin.
+            </div>
+          </div>
+
+          </div><!-- /player-reading-main -->
+          </div><!-- /player-reader-inner -->
         </div>
-      </div>
 
-      <!-- Full Transport -->
-      <div class="transport-bar transport-pill">
-        <button class="btn btn-primary btn-xl" id="play-button-2"   type="button">▶ Play</button>
-        <button class="btn btn-secondary"      id="pause-button-2"  type="button">⏸ Pause</button>
-        <button class="btn btn-secondary"      id="resume-button-2" type="button">⏩ Resume</button>
-        <button class="btn btn-secondary"      id="stop-button-2"   type="button">⏹ Stop</button>
-      </div>
+        <!-- RIGHT: Compact Controls Panel -->
+        <aside class="player-controls-col">
 
-      <!-- Chunk list -->
-      <div class="section-card">
-        <h2 class="section-title">📋 Reading Queue</h2>
-        <p class="section-desc">Click any chunk to jump to it.</p>
-        <div id="chunk-list" class="chunk-list"></div>
+          <!-- Transport -->
+          <div class="player-control-block player-transport-block">
+            <div class="player-transport-row">
+              <button class="btn btn-primary" id="play-button-2" type="button">▶ Play</button>
+              <button class="btn btn-secondary" id="pause-button-2" type="button">⏸</button>
+              <button class="btn btn-secondary" id="resume-button-2" type="button">⏩</button>
+              <button class="btn btn-secondary" id="stop-button-2" type="button">⏹</button>
+            </div>
+            <div class="player-status-inline" id="status-card">
+              <span class="status-dot" id="status-dot"></span>
+              <strong id="playback-status">Idle</strong>
+              <span id="status-message">Open a book to begin.</span>
+            </div>
+          </div>
+
+          <!-- Reader settings -->
+          <div class="player-control-block">
+            <p class="player-control-label">Chapter</p>
+            <select id="chapter-jump" disabled class="player-select"><option>—</option></select>
+            <p class="player-control-label" style="margin-top:12px">Mode</p>
+            <select id="playback-mode" class="player-select">
+              <option value="normal">Normal</option>
+              <option value="relaxed">Relaxed</option>
+              <option value="dense">Careful</option>
+              <option value="skip_footnotes">Skip footnotes</option>
+            </select>
+            <p class="player-control-label" style="margin-top:12px">Sleep Timer</p>
+            <div style="display:flex;gap:8px;align-items:center">
+              <select id="sleep-timer" class="player-select" style="flex:1">
+                <option value="">Off</option>
+                <option value="15">15 min</option>
+                <option value="30">30 min</option>
+                <option value="60">60 min</option>
+                <option value="chapter">After chapter</option>
+              </select>
+              <span id="sleep-timer-label" class="tool-hint">Off</span>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="player-control-block player-actions-block">
+            <button type="button" id="focus-mode-btn" class="player-action-btn">🎯 Focus Mode</button>
+            <button type="button" id="bookmark-btn" class="player-action-btn">🔖 Bookmark</button>
+            <button type="button" id="replay-chunk-btn" class="player-action-btn">↺ Replay</button>
+            <button id="download-chapter-btn" class="player-action-btn" type="button">⬇ Chapter MP3</button>
+            <button id="download-button" class="player-action-btn" type="button">⬇ Full Book MP3</button>
+            <button type="button" id="export-progress-btn" class="player-action-btn">📤 Export Progress</button>
+            <label class="player-action-btn" style="cursor:pointer">📥 Import Progress
+              <input id="import-progress-input" type="file" accept="application/json" hidden>
+            </label>
+          </div>
+
+          <!-- Sections -->
+          <div class="player-control-block player-sections-block">
+            <p class="player-control-label">Sections</p>
+            <div id="chunk-list" class="chunk-list player-chunk-list"></div>
+          </div>
+
+          <!-- Bookmarks -->
+          <div class="player-control-block">
+            <p class="player-control-label">Bookmarks</p>
+            <div id="bookmarks-list" class="bookmarks-list"></div>
+          </div>
+
+          <!-- Pronunciation -->
+          <div class="player-control-block">
+            <p class="player-control-label">Pronunciation Rules</p>
+            <textarea id="pronunciation-input" class="pronunciation-input" rows="4" placeholder="word = how to say it"></textarea>
+            <button type="button" id="pronunciation-save" class="btn btn-outline btn-sm" style="margin-top:8px;width:100%">Save Rules</button>
+          </div>
+
+        </aside>
       </div>
     </section>
 
-    <!-- ====== TAB: PDF READER ====== -->
+    <!-- ====== TAB: PDF READER (DearFlip Flipbook) ====== -->
     <section class="tab-pane" id="tab-pdfreader">
-      <div class="pdf-reader-layout">
+      <div class="flipbook-layout">
 
-        <!-- LEFT: PDF Viewer -->
-        <div class="pdf-viewer-col">
-          <div class="pdf-viewer-header">
-            <div>
-              <p class="page-kicker">PDF Book</p>
-              <h1 id="pdf-reader-docname">No PDF loaded</h1>
-              <span id="pdf-chunk-indicator" class="pdf-chunk-indicator" style="display:none; margin-top:4px;"></span>
-            </div>
-            <div class="header-actions">
-              <label class="btn btn-primary" for="pdf-reader-input" style="cursor:pointer">📑 Open PDF</label>
+        <!-- Main flipbook viewer -->
+        <div class="flipbook-viewer-col">
+          <!-- Toolbar -->
+          <div class="flipbook-toolbar">
+            <div class="flipbook-toolbar-left">
+              <button type="button" class="btn btn-ghost btn-sm" id="pdf-back-to-library">Library</button>
+              <label class="btn btn-primary btn-sm" for="pdf-reader-input" style="cursor:pointer">Open PDF</label>
               <input id="pdf-reader-input" type="file" accept="application/pdf,.pdf" style="display:none">
-              
-              <div class="pdf-media-controls" id="pdf-media-controls" style="display:none;">
-                <button type="button" id="pdf-prev-chunk" class="media-btn" title="Previous section">⏪</button>
-                <button type="button" id="pdf-read-aloud-btn" class="media-btn media-btn-play" title="Play">▶</button>
-                <button type="button" id="pdf-stop-btn" class="media-btn" title="Stop">⏹</button>
-                <button type="button" id="pdf-next-chunk" class="media-btn" title="Next section">⏩</button>
+              <span id="flipbook-title" class="flipbook-doc-title">No PDF loaded</span>
+            </div>
+            <div class="flipbook-toolbar-right" id="flipbook-tts-controls" style="display:none">
+              <!-- Reading mode toggle -->
+              <div class="flipbook-mode-toggle">
+                <button id="flipbook-mode-read" class="mode-btn is-active" type="button" title="Reading Mode">Read</button>
+                <button id="flipbook-mode-listen" class="mode-btn" type="button" title="Listen Mode">Listen</button>
+                <button id="flipbook-mode-highlight" class="mode-btn" type="button" title="Highlights">Highlights</button>
               </div>
-
-              <button id="pdf-download-btn" class="btn btn-ghost" type="button" disabled>⬇ MP3</button>
+              <!-- TTS controls (shown in listen mode) -->
+              <div id="flipbook-listen-controls" class="flipbook-listen-controls" style="display:none">
+                <div class="pdf-media-controls">
+                  <button type="button" id="pdf-prev-chunk" class="media-btn" title="Previous section">⏪</button>
+                  <button type="button" id="pdf-read-aloud-btn" class="media-btn media-btn-play" title="Play">▶</button>
+                  <button type="button" id="pdf-stop-btn" class="media-btn" title="Stop">⏹</button>
+                  <button type="button" id="pdf-next-chunk" class="media-btn" title="Next section">⏩</button>
+                </div>
+                <label class="flipbook-auto-flip-label">
+                  <input type="checkbox" id="flipbook-auto-flip" checked>
+                  Auto-flip pages (read mode)
+                </label>
+              </div>
+              <span id="pdf-chunk-indicator" class="pdf-chunk-indicator"></span>
             </div>
           </div>
 
-          <!-- Rendered pages go here -->
-          <div class="pdf-canvas-area" id="pdf-canvas-area">
-            <div class="pdf-empty-state" id="pdf-empty-state">
-              <div style="font-size:4rem">📑</div>
-              <strong>Open a PDF to start reading</strong>
-              <p>Your PDF will be rendered here. Click any section to start reading from that point.</p>
-              <label class="btn btn-primary btn-large" for="pdf-reader-input" style="cursor:pointer;margin-top:1rem">📂 Open PDF File</label>
+          <!-- DearFlip Container - the magic lives here -->
+          <div class="flipbook-container" id="flipbook-container">
+            <!-- Empty state shown before PDF is loaded -->
+            <div class="flipbook-empty" id="flipbook-empty">
+              <div class="flipbook-empty-icon">PDF</div>
+              <h2>Open a PDF to start</h2>
+              <p>Your book will appear here as a realistic flipping page flipbook.</p>
+              <label class="btn btn-primary btn-large" for="pdf-reader-input" style="cursor:pointer">Open PDF File</label>
             </div>
+            <div id="pdf-interaction-layer" class="pdf-interaction-layer" hidden></div>
+            <!-- DearFlip book div injected here by JS -->
           </div>
         </div>
 
-        <!-- RIGHT: Controls panel -->
-        <div class="pdf-controls-col">
-          <div class="pdf-control-block">
-            <h2 class="section-title">📋 Reading Queue</h2>
-            <p class="section-desc">Each page is a chunk. Click to jump.</p>
-            <div id="pdf-chunk-list" class="chunk-list"></div>
-          </div>
-
-          <div class="pdf-control-block">
-            <h2 class="section-title">⚡ Speed</h2>
-            <div class="slider-item">
-              <div class="slider-header">
-                <label class="field-label" for="pdf-rate-input">Rate</label>
-                <output id="pdf-rate-output" class="slider-value">1.00×</output>
-              </div>
-              <input id="pdf-rate-input" type="range" min="0.5" max="2" step="0.05" value="1">
-            </div>
-          </div>
-
-          <div class="pdf-control-block">
-            <h2 class="section-title">📊 Status</h2>
-            <div class="pdf-status-card" id="pdf-status-card">
+        <!-- Right: Highlights + Status panel -->
+        <div class="flipbook-panel-col">
+          <!-- Status card -->
+          <div class="flipbook-panel-block" id="flipbook-status-block" style="display:none">
+            <h3 class="flipbook-panel-title">Status</h3>
+            <div class="pdf-status-card">
               <span class="status-dot" id="pdf-status-dot"></span>
               <div>
                 <strong id="pdf-status-label">Idle</strong>
                 <p id="pdf-status-msg">Open a PDF to begin.</p>
               </div>
             </div>
+            <!-- Speed -->
+            <div class="slider-item" style="margin-top:16px">
+              <div class="slider-header">
+                <label class="field-label" for="pdf-rate-input">Speed</label>
+                <output id="pdf-rate-output" class="slider-value">1.00x</output>
+              </div>
+              <input id="pdf-rate-input" type="range" min="0.5" max="2" step="0.05" value="1">
+            </div>
+          </div>
+
+          <!-- Highlights panel -->
+          <div class="flipbook-panel-block">
+            <h3 class="flipbook-panel-title">Highlights</h3>
+            <p class="flipbook-panel-hint">Select any text in the flipbook to highlight it.</p>
+            <div id="flipbook-highlights-list" class="flipbook-highlights-list">
+              <p class="flipbook-no-highlights">No highlights yet.</p>
+            </div>
+            <button id="flipbook-export-highlights" class="btn btn-outline btn-sm" style="width:100%;margin-top:12px;display:none">Export Highlights</button>
+          </div>
+
+          <!-- Contents (listen mode) -->
+          <div class="flipbook-panel-block flipbook-toc-block" id="flipbook-toc-block" style="display:none">
+            <div class="book-toc-head">
+              <span>Contents</span>
+              <strong id="pdf-listen-toc-count">0</strong>
+            </div>
+            <div id="pdf-listen-toc-list" class="book-toc-list"></div>
+          </div>
+
+          <!-- Reading Queue (for listen mode) -->
+          <div class="flipbook-panel-block" id="flipbook-queue-block" style="display:none">
+            <h3 class="flipbook-panel-title">Reading Queue</h3>
+            <div id="pdf-chunk-list" class="chunk-list"></div>
           </div>
         </div>
 
@@ -363,12 +524,31 @@
 
   </div><!-- /app-content -->
 
+  <div class="chapter-transition chapter-transition--global" id="chapter-transition" hidden aria-live="polite">
+    <div class="chapter-transition-veil" aria-hidden="true"></div>
+    <div class="chapter-transition-glow" aria-hidden="true"></div>
+    <div class="chapter-transition-grain" aria-hidden="true"></div>
+    <div class="chapter-transition-content">
+      <p id="chapter-transition-kicker">Next chapter</p>
+      <div class="chapter-transition-ornament" aria-hidden="true"><span></span><span></span><span></span></div>
+      <h2 id="chapter-transition-title">Chapter</h2>
+      <div class="chapter-transition-line"></div>
+      <span id="chapter-transition-meta">Section 1</span>
+    </div>
+  </div>
+
+  <!-- DearFlip dependencies -->
+  <script src="/webapp/dflip/js/libs/jquery.min.js"></script>
+  <script src="/webapp/dflip/js/libs/compatibility.js"></script>
+  <script src="/webapp/dflip/js/dflip.min.js"></script>
+  <!-- Three.js & App -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="/js/aws-sdk.js"></script>
   <script type="module" src="/webapp/js/main.js"></script>
   <script>
     // Tab navigation
     document.addEventListener('DOMContentLoaded', () => {
-      function switchTab(tabId) {
+      window.switchTab = function switchTab(tabId) {
         document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('is-active'));
         document.querySelectorAll('.nav-btn').forEach(b => { b.classList.remove('is-active'); b.setAttribute('aria-selected', 'false'); });
         const pane = document.getElementById('tab-' + tabId);
@@ -376,7 +556,9 @@
         const btn = document.querySelector(`[data-tab="${tabId}"]`);
         if (btn) { btn.classList.add('is-active'); btn.setAttribute('aria-selected', 'true'); }
         document.body.classList.toggle('is-pdf-tab', tabId === 'pdfreader');
-      }
+      };
+
+      window.switchTab('library');
 
       document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -411,10 +593,6 @@
         if (el) obs.observe(el, { childList: true, characterData: true, subtree: true });
       });
 
-      document.body.classList.toggle(
-        'is-pdf-tab',
-        document.querySelector('.nav-btn.is-active')?.dataset.tab === 'pdfreader'
-      );
     });
   </script>
 </body>

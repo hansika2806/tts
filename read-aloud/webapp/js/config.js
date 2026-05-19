@@ -1,10 +1,18 @@
-export const STORAGE_KEY = "read-aloud-webapp:v2";
+export const STORAGE_KEY = "read-aloud-webapp:v3";
 
 export const MAX_CHARS_PER_CHUNK = {
+  novel: 900,
   balanced: 550,
   paragraphs: 1800,
   sentences: 240,
 };
+
+export const PLAYBACK_MODES = [
+  { id: "normal", label: "Normal" },
+  { id: "relaxed", label: "Relaxed (slower)" },
+  { id: "dense", label: "Careful pace" },
+  { id: "skip_footnotes", label: "Skip footnotes" },
+];
 
 export const OPENAI_DEFAULT_VOICES = [
   { id: "alloy", name: "OpenAI alloy", model: "gpt-4o-mini-tts", langs: ["en-US", "zh-CN"] },

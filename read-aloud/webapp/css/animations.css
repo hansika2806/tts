@@ -1,0 +1,484 @@
+/* ============================================================
+   READ ALOUD — PREMIUM ANIMATIONS
+   Inspired by Dribbble-level motion design:
+   - 3D Card Tilt on Library Books
+   - Magnetic Play Button with Ripple
+   - Staggered Chapter List Entry
+   - Morphing Waveform Visualizer
+   - Ink-drop Spotlight on Hover
+   - Floating label animations
+   ============================================================ */
+
+/* ─── 1. LIBRARY BOOK CARDS — 3D Tilt + Depth ─── */
+.library-card {
+  transform-style: preserve-3d;
+  perspective: 1000px;
+  transition:
+    transform 0.5s cubic-bezier(0.23, 1, 0.32, 1),
+    box-shadow 0.5s cubic-bezier(0.23, 1, 0.32, 1),
+    border-color 0.3s ease;
+  will-change: transform;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Ink-drop spotlight follows cursor — added via JS */
+.library-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(255, 255, 255, 0.06) 0%,
+    transparent 60%
+  );
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.library-card:hover::after {
+  opacity: 1;
+}
+
+.library-card:hover {
+  border-color: var(--border-accent);
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(255,255,255,0.05),
+    0 8px 32px var(--accent-glow);
+}
+
+/* Progress bar shimmer on card hover */
+.library-card:hover .library-card-progress-bar {
+  filter: brightness(1.2);
+  transition: filter 0.3s ease;
+}
+
+/* Book type emoji pop */
+.library-card-type {
+  display: inline-block;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.library-card:hover .library-card-type {
+  transform: scale(1.25) rotate(-5deg);
+}
+
+/* Card title reveal */
+.library-card-title {
+  transition: color 0.3s ease;
+}
+
+.library-card:hover .library-card-title {
+  color: var(--text-accent);
+}
+
+/* ─── 2. NAV BUTTONS — Slide-in indicator ─── */
+.nav-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.nav-btn::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0);
+  width: 3px;
+  height: 60%;
+  background: var(--accent-grad);
+  border-radius: 0 3px 3px 0;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.nav-btn.is-active::before,
+.nav-btn:hover::before {
+  transform: translateY(-50%) scaleY(1);
+}
+
+/* ─── 3. TRANSPORT BUTTONS — Magnetic + Ripple ─── */
+.transport-btn, .btn {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Ripple effect on click */
+.btn-ripple {
+  position: absolute;
+  border-radius: 50%;
+  transform: scale(0);
+  animation: ripple-expand 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  background: rgba(255, 255, 255, 0.25);
+  pointer-events: none;
+}
+
+@keyframes ripple-expand {
+  to {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+
+/* ─── 4. PLAY BUTTON — Premium Pulsing Halo ─── */
+#play-button-2.is-playing,
+#play-button.is-playing {
+  animation: play-btn-halo 2s ease-in-out infinite;
+}
+
+@keyframes play-btn-halo {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow), 0 4px 20px var(--accent-glow); }
+  50% { box-shadow: 0 0 0 10px transparent, 0 4px 28px var(--accent-glow); }
+}
+
+/* ─── 5. BOOK EXPERIENCE — Cinematic Cover Reveal ─── */
+.book-experience {
+  animation: none; /* base: suppressed */
+}
+
+.book-experience.is-animating-in {
+  animation: book-cover-reveal 0.8s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes book-cover-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.98);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+/* Book title big entrance */
+#book-experience-title {
+  transition: none;
+}
+
+.book-experience.is-animating-in #book-experience-title {
+  animation: text-reveal 0.7s cubic-bezier(0.23, 1, 0.32, 1) 0.15s both;
+}
+
+@keyframes text-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    clip-path: inset(0 0 0% 0);
+  }
+}
+
+/* ─── 6. CHAPTER TOC ITEMS — Staggered slide-in ─── */
+.book-toc-item {
+  opacity: 0;
+  transform: translateX(-16px);
+  animation: toc-slide-in 0.5s cubic-bezier(0.23, 1, 0.32, 1) forwards;
+}
+
+/* Stagger delays set via JS: style="--i: 0" */
+.book-toc-item {
+  animation-delay: calc(var(--i, 0) * 60ms + 300ms);
+}
+
+@keyframes toc-slide-in {
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Active chapter highlight morphs */
+.book-toc-item.is-active {
+  background: var(--accent-dim);
+  border-left: 3px solid var(--purple);
+  padding-left: 14px;
+  transition: background 0.4s ease, border-color 0.4s ease, padding 0.4s ease;
+}
+
+/* ─── 7. READER PARAGRAPH WORD HIGHLIGHT ─── */
+.active-word {
+  color: var(--text-accent);
+  text-shadow: 0 0 20px var(--accent-glow);
+  transition: color 0.15s ease, text-shadow 0.15s ease;
+}
+
+/* ─── 8. STATUS BADGE — Breathing indicator ─── */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  margin-right: 6px;
+}
+
+.status-dot.is-playing {
+  animation: status-breathe 1.5s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5);
+}
+
+@keyframes status-breathe {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5);
+  }
+  50% {
+    transform: scale(1.2);
+    box-shadow: 0 0 0 6px rgba(52, 211, 153, 0);
+  }
+}
+
+/* ─── 9. CHUNK LIST ITEMS — Reading position indicator ─── */
+.chunk-item {
+  position: relative;
+  transition:
+    background 0.25s ease,
+    border-color 0.25s ease,
+    transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  overflow: hidden;
+}
+
+.chunk-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent-grad);
+  transform: scaleY(0);
+  transform-origin: bottom;
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  border-radius: 0 3px 3px 0;
+}
+
+.chunk-item.is-active::before {
+  transform: scaleY(1);
+}
+
+.chunk-item.is-active {
+  background: var(--accent-dim);
+  padding-left: 12px;
+}
+
+/* ─── 10. MINI WAVEFORM — Cinematic equalizer ─── */
+.mini-player-waveform span {
+  display: inline-block;
+  width: 3px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--purple);
+  transform-origin: center bottom;
+  animation: none;
+  transition: height 0.2s ease;
+}
+
+/* When playing, each bar animates independently */
+body.is-playing .mini-player-waveform span:nth-child(1)  { animation: eq-bar 0.8s ease-in-out infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(2)  { animation: eq-bar 0.9s ease-in-out 0.1s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(3)  { animation: eq-bar 0.7s ease-in-out 0.2s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(4)  { animation: eq-bar 1.0s ease-in-out 0.15s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(5)  { animation: eq-bar 0.85s ease-in-out 0.05s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(6)  { animation: eq-bar 0.75s ease-in-out 0.25s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(7)  { animation: eq-bar 0.95s ease-in-out 0.1s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(8)  { animation: eq-bar 0.65s ease-in-out 0.3s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(9)  { animation: eq-bar 0.88s ease-in-out 0.0s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(10) { animation: eq-bar 0.72s ease-in-out 0.18s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(11) { animation: eq-bar 0.92s ease-in-out 0.08s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(12) { animation: eq-bar 0.78s ease-in-out 0.22s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(13) { animation: eq-bar 0.82s ease-in-out 0.12s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(14) { animation: eq-bar 0.68s ease-in-out 0.28s infinite alternate; }
+body.is-playing .mini-player-waveform span:nth-child(15) { animation: eq-bar 0.96s ease-in-out 0.04s infinite alternate; }
+
+@keyframes eq-bar {
+  from { height: 4px; opacity: 0.4; }
+  to   { height: 20px; opacity: 1; }
+}
+
+/* ─── 11. TAB TRANSITIONS — Blur-slide in ─── */
+.tab-pane.is-active {
+  animation: tab-blur-in 0.45s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes tab-blur-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* ─── 12. IMPORT CARDS — Floating hover ─── */
+.import-card {
+  transition:
+    transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.4s cubic-bezier(0.23, 1, 0.32, 1),
+    border-color 0.3s ease;
+}
+
+.import-card:hover {
+  transform: translateY(-6px) scale(1.01);
+  box-shadow:
+    0 24px 48px rgba(0, 0, 0, 0.35),
+    0 0 0 1px var(--border-accent);
+}
+
+.import-card-icon {
+  display: inline-block;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.import-card:hover .import-card-icon {
+  transform: scale(1.2) translateY(-4px);
+}
+
+/* ─── 13. SECTION CARDS — Lift on hover ─── */
+.section-card {
+  transition:
+    transform 0.35s cubic-bezier(0.23, 1, 0.32, 1),
+    box-shadow 0.35s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.section-card:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.3),
+    0 0 0 1px var(--border-accent);
+}
+
+/* ─── 14. BTN PRIMARY — Shine sweep ─── */
+.btn-primary::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.15),
+    transparent
+  );
+  transform: skewX(-20deg);
+  transition: left 0.6s ease;
+  pointer-events: none;
+}
+
+.btn-primary:hover::before {
+  left: 150%;
+}
+
+/* ─── 15. MINI PLAYER — Slide up entrance ─── */
+.mini-player {
+  animation: mini-player-enter 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.5s both;
+}
+
+@keyframes mini-player-enter {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+/* ─── 16. PAGE HEADER — Character cascade ─── */
+.page-header {
+  animation: header-cascade 0.6s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes header-cascade {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── 17. PLAYER ACTION BUTTONS — Bounce on hover ─── */
+.player-action-btn {
+  transition:
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.player-action-btn:hover {
+  transform: scale(1.04) translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.player-action-btn:active {
+  transform: scale(0.97);
+}
+
+/* ─── 18. SLIDER — Custom styled + fill animation ─── */
+input[type="range"] {
+  accent-color: var(--purple);
+  transition: accent-color 0.3s ease;
+}
+
+input[type="range"]:hover {
+  accent-color: var(--purple-2);
+}
+
+/* ─── 19. PDF PAGE — Zoom entrance per page ─── */
+.pdf-page {
+  opacity: 0;
+  animation: pdf-page-enter 0.5s cubic-bezier(0.23, 1, 0.32, 1) forwards;
+}
+
+/* Stagger via CSS nth-child */
+.pdf-page:nth-child(1)  { animation-delay: 0ms; }
+.pdf-page:nth-child(2)  { animation-delay: 80ms; }
+.pdf-page:nth-child(3)  { animation-delay: 160ms; }
+.pdf-page:nth-child(4)  { animation-delay: 240ms; }
+.pdf-page:nth-child(5)  { animation-delay: 320ms; }
+.pdf-page:nth-child(n+6) { animation-delay: 0ms; }
+
+@keyframes pdf-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ─── 20. BRAND ICON — Heartbeat ─── */
+.brand-icon {
+  animation: brand-heartbeat 4s ease-in-out infinite;
+}
+
+@keyframes brand-heartbeat {
+  0%, 90%, 100% { transform: scale(1); }
+  93% { transform: scale(1.12); }
+  96% { transform: scale(1.05); }
+}
+
+/* ─── THEME TRANSITION — Smooth color morphing ─── */
+* {
+  transition:
+    background-color 0.35s ease,
+    border-color 0.35s ease,
+    color 0.2s ease;
+}
+
+/* Don't slow down animations themselves */
+*[class*="animation"],
+.btn-ripple,
+.eq-bar,
+.chunk-item::before {
+  transition: none;
+}

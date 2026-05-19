@@ -28,7 +28,6 @@ export async function openPdfBook(file, containerEl, onStatus, onChunkReady, onF
   const buffer = await file.arrayBuffer();
   const pdfDoc = await lib.getDocument({ data: buffer }).promise;
 
-  const SCALE = 1.25;
   const allChunks = [];
   let globalChunkId = 0;
 
@@ -37,6 +36,9 @@ export async function openPdfBook(file, containerEl, onStatus, onChunkReady, onF
   containerEl.dataset.title = docTitle;
 
   const page1 = await pdfDoc.getPage(1);
+  const baseVp = page1.getViewport({ scale: 1 });
+  const availableWidth = Math.max(320, containerEl.clientWidth - 64);
+  const SCALE = Math.min(1.55, Math.max(0.75, availableWidth / baseVp.width));
   const vp1 = page1.getViewport({ scale: SCALE });
 
   const pageWrappers = [];
@@ -80,40 +82,37 @@ export async function openPdfBook(file, containerEl, onStatus, onChunkReady, onF
 
       try {
         const page = await pdfDoc.getPage(pNum);
+        const viewport = page.getViewport({ scale: 1 });
         const textContent = await page.getTextContent();
-        const items = textContent.items.filter((i) => i.str.trim());
+        const { items, indices } = filterBodyText(textContent.items, viewport.height);
 
-        let currentChunk = "";
-        let currentItems = [];
+        if (!items.length) continue;
 
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
-          currentChunk += (currentChunk ? " " : "") + item.str;
-          currentItems.push(i);
+        // Group by Y-coordinate into natural lines, then chunk by sentence groups
+        const lineGroups = groupItemsIntoLines(items, indices);
+        const sentenceChunks = mergeLinesToSentences(lineGroups, 3);
 
-          if (/[.?!]$/.test(item.str) || currentChunk.length > 150 || i === items.length - 1) {
-            const chunkObj = {
-              id: globalChunkId++,
-              text: currentChunk.replace(/\s+/g, " ").trim(),
-              pageIndex: pNum - 1,
-              itemIndices: currentItems,
-            };
-            allChunks.push(chunkObj);
-            onChunkReady?.(chunkObj);
-
-            currentChunk = "";
-            currentItems = [];
-          }
+        for (const sc of sentenceChunks) {
+          const text = sc.text.replace(/\s+/g, " ").trim();
+          if (!text) continue;
+          const chunkObj = {
+            id: globalChunkId++,
+            text,
+            pageIndex: pNum - 1,
+            itemIndices: sc.indices,
+          };
+          allChunks.push(chunkObj);
+          onChunkReady?.(chunkObj);
         }
       } catch (e) {
         console.warn(`Failed to extract text from page ${pNum}`, e);
       }
 
-      if (pNum % 5 === 0) {
+      if (pNum % 3 === 0) {
         await new Promise((r) => setTimeout(r, 0));
       }
     }
-    onFinished?.();
+    onFinished?.({ pageCount: pdfDoc.numPages, chunkCount: allChunks.length });
   }, 50);
 
   return { title: docTitle, pageCount: pdfDoc.numPages, pageWrappers };
@@ -142,19 +141,23 @@ async function renderPageVisuals(pdfDoc, pageNum, wrapper, SCALE) {
     wrapper.appendChild(textLayerDiv);
 
     const textContent = await page.getTextContent();
-    const items = textContent.items.filter((i) => i.str.trim());
+    const { items, indices: bodyIndices } = filterBodyText(textContent.items, viewport.height);
 
     const fragment = document.createDocumentFragment();
-    items.forEach((item, idx) => {
+    items.forEach((item, localIdx) => {
+      const idx = bodyIndices[localIdx];
       const span = document.createElement("span");
       span.textContent = item.str;
       const left = item.transform[4] * SCALE;
-      const top = viewport.height - item.transform[5] * SCALE;
-      const fontSize = item.transform[0] * SCALE;
-
+      const baseY = viewport.height - item.transform[5] * SCALE;
+      const fontSize = Math.abs(item.transform[0] || item.transform[3] || 12) * SCALE;
+      
       span.style.left = left + "px";
-      span.style.top = top - fontSize + "px";
+      span.style.top  = (baseY - fontSize) + "px";
       span.style.fontSize = fontSize + "px";
+      span.style.lineHeight = "1";
+      span.style.fontFamily = "sans-serif"; // Provides a more consistent bounding box
+      
       span.dataset.itemIdx = String(idx);
       fragment.appendChild(span);
     });
@@ -217,4 +220,57 @@ export function highlightChunk(chunk, pageWrappers, options = {}) {
     behavior: smooth ? "smooth" : "auto",
     block: "nearest",
   });
+}
+
+/** Drop top/bottom ~10% (headers, footers, page numbers). */
+function filterBodyText(items, pageHeight) {
+  const trimmed = [];
+  const indices = [];
+  const top = pageHeight * 0.08;
+  const bottom = pageHeight * 0.92;
+
+  items.forEach((item, idx) => {
+    if (!item.str?.trim()) return;
+    const y = item.transform[5];
+    if (y < top || y > bottom) return;
+    trimmed.push(item);
+    indices.push(idx);
+  });
+
+  return { items: trimmed, indices };
+}
+
+/** Group items by Y-coordinate proximity into visual lines */
+function groupItemsIntoLines(items, indices, yTolerance = 3) {
+  const lines = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const y = Math.round(item.transform[5] / yTolerance) * yTolerance;
+    const existing = lines.find(l => l.y === y);
+    if (existing) {
+      existing.items.push(item);
+      existing.indices.push(indices[i]);
+    } else {
+      lines.push({ y, items: [item], indices: [indices[i]] });
+    }
+  }
+  // Sort lines top-to-bottom (PDF y-axis is inverted, higher y = higher on page)
+  lines.sort((a, b) => b.y - a.y);
+  return lines;
+}
+
+/** Merge N consecutive lines into sentence-level chunks for better TTS flow */
+function mergeLinesToSentences(lines, linesPerChunk = 3) {
+  const chunks = [];
+  for (let i = 0; i < lines.length; i += linesPerChunk) {
+    const group = lines.slice(i, i + linesPerChunk);
+    const text = group
+      .map(l => l.items.map(it => it.str).join(" "))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const indices = group.flatMap(l => l.indices);
+    if (text) chunks.push({ text, indices });
+  }
+  return chunks;
 }
