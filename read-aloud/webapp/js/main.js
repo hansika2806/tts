@@ -3,38 +3,41 @@ import { createProviders } from "./providers.js";
 import { createUi } from "./ui.js";
 import { extractTextFromPdf } from "./pdf-import.js";
 import { releaseAudioResources } from "./audio.js";
+import { initPdfReader } from "./pdf-controller.js";
 
 const elements = {
-  providerPicker: document.getElementById("provider-picker"),
-  voiceSelect: document.getElementById("voice-select"),
-  textInput: document.getElementById("text-input"),
-  titleInput: document.getElementById("document-title"),
-  charCount: document.getElementById("char-count"),
-  chunkCount: document.getElementById("chunk-count"),
-  chunkMode: document.getElementById("chunk-mode"),
-  rateInput: document.getElementById("rate-input"),
-  pitchInput: document.getElementById("pitch-input"),
-  volumeInput: document.getElementById("volume-input"),
-  rateOutput: document.getElementById("rate-output"),
-  pitchOutput: document.getElementById("pitch-output"),
-  volumeOutput: document.getElementById("volume-output"),
-  playButton: document.getElementById("play-button"),
-  pauseButton: document.getElementById("pause-button"),
-  resumeButton: document.getElementById("resume-button"),
-  stopButton: document.getElementById("stop-button"),
-  playbackStatus: document.getElementById("playback-status"),
-  statusMessage: document.getElementById("status-message"),
-  refreshVoices: document.getElementById("refresh-voices"),
+  providerPicker:  document.getElementById("provider-picker"),
+  voiceSelect:     document.getElementById("voice-select"),
+  textInput:       document.getElementById("text-input"),
+  titleInput:      document.getElementById("document-title"),
+  charCount:       document.getElementById("char-count"),
+  chunkCount:      document.getElementById("chunk-count"),
+  chunkMode:       document.getElementById("chunk-mode"),
+  rateInput:       document.getElementById("rate-input"),
+  pitchInput:      document.getElementById("pitch-input"),
+  volumeInput:     document.getElementById("volume-input"),
+  rateOutput:      document.getElementById("rate-output"),
+  pitchOutput:     document.getElementById("pitch-output"),
+  volumeOutput:    document.getElementById("volume-output"),
+  // Sidebar mini-player buttons (authoritative — player tab forwards to these)
+  playButton:      document.getElementById("play-button"),
+  pauseButton:     document.getElementById("pause-button"),
+  resumeButton:    document.getElementById("resume-button"),
+  stopButton:      document.getElementById("stop-button"),
+  downloadButton:  document.getElementById("download-button"),
+  playbackStatus:  document.getElementById("playback-status"),
+  statusMessage:   document.getElementById("status-message"),
+  statusCard:      document.getElementById("status-card"),
+  refreshVoices:   document.getElementById("refresh-voices"),
   saveCredentials: document.getElementById("save-credentials"),
-  credentialsForms: document.getElementById("credentials-forms"),
-  readerTitle: document.getElementById("reader-title"),
-  readerProgress: document.getElementById("reader-progress"),
-  readerPreview: document.getElementById("reader-preview"),
-  chunkList: document.getElementById("chunk-list"),
-  sampleButton: document.getElementById("sample-button"),
-  clearButton: document.getElementById("clear-button"),
-  fileInput: document.getElementById("file-input"),
-  pdfInput: document.getElementById("pdf-input"),
+  credentialsForms:document.getElementById("credentials-forms"),
+  readerTitle:     document.getElementById("reader-title"),
+  readerProgress:  document.getElementById("reader-progress"),
+  readerPreview:   document.getElementById("reader-preview"),
+  chunkList:       document.getElementById("chunk-list"),
+  sampleButton:    document.getElementById("sample-button"),
+  clearButton:     document.getElementById("clear-button"),
+  fileInput:       document.getElementById("file-input"),
 };
 
 const persisted = loadState();
@@ -80,6 +83,8 @@ async function initialize() {
   ui.updateStats();
   ui.rebuildQueue();
   ui.setStatus("Idle", "Browser voices work without any key. Cloud providers need your own account credentials.");
+  // Initialize the standalone PDF book reader
+  initPdfReader(state, runtime, providers, ui);
 }
 
 function bindEvents() {
@@ -106,18 +111,23 @@ function bindEvents() {
     state.rate = Number(elements.rateInput.value);
     elements.rateOutput.value = `${state.rate.toFixed(2)}x`;
     persistState(state);
+    if (runtime.currentAudio) runtime.currentAudio.playbackRate = state.rate;
+    if (runtime.currentUtterance) runtime.currentUtterance.rate = state.rate;
   });
 
   elements.pitchInput.addEventListener("input", () => {
     state.pitch = Number(elements.pitchInput.value);
     elements.pitchOutput.value = `${state.pitch.toFixed(2)}x`;
     persistState(state);
+    if (runtime.currentUtterance) runtime.currentUtterance.pitch = state.pitch;
   });
 
   elements.volumeInput.addEventListener("input", () => {
     state.volume = Number(elements.volumeInput.value);
     elements.volumeOutput.value = `${Math.round(state.volume * 100)}%`;
     persistState(state);
+    if (runtime.currentAudio) runtime.currentAudio.volume = state.volume;
+    if (runtime.currentUtterance) runtime.currentUtterance.volume = state.volume;
   });
 
   elements.voiceSelect.addEventListener("change", () => {
@@ -129,12 +139,12 @@ function bindEvents() {
   elements.pauseButton.addEventListener("click", pausePlayback);
   elements.resumeButton.addEventListener("click", resumePlayback);
   elements.stopButton.addEventListener("click", stopPlayback);
+  elements.downloadButton.addEventListener("click", downloadAudio);
   elements.refreshVoices.addEventListener("click", () => refreshVoices(true));
   elements.saveCredentials.addEventListener("click", saveCredentialInputs);
   elements.sampleButton.addEventListener("click", loadSampleText);
   elements.clearButton.addEventListener("click", clearDocument);
   elements.fileInput.addEventListener("change", importTextFile);
-  elements.pdfInput.addEventListener("change", importPdfFile);
 }
 
 async function handleProviderSelect(providerId) {
@@ -217,26 +227,7 @@ async function importTextFile(event) {
   event.target.value = "";
 }
 
-async function importPdfFile(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-  try {
-    const result = await extractTextFromPdf(file, (message) => ui.setStatus("Loading", message));
-    if (!result.text.trim()) throw new Error("No readable text was found in that PDF.");
-    state.text = result.text;
-    state.title = state.title || result.title;
-    elements.textInput.value = state.text;
-    elements.titleInput.value = state.title;
-    persistState(state);
-    ui.updateStats();
-    ui.rebuildQueue();
-    ui.setStatus("Ready", `Imported ${result.pageCount} PDF pages from ${file.name}.`);
-  } catch (error) {
-    ui.setStatus("Error", `PDF import failed: ${error.message}`, true);
-  } finally {
-    event.target.value = "";
-  }
-}
+
 
 async function startPlayback() {
   if (!runtime.queue.length) {
@@ -346,4 +337,70 @@ function getActiveVoices() {
     if (Array.isArray(entry?.items)) return entry.items;
   }
   return [];
+}
+
+async function downloadAudio() {
+  if (!runtime.queue.length) {
+    ui.setStatus("Error", "There is no text to download yet.", true);
+    return;
+  }
+  if (!state.voiceId) {
+    ui.setStatus("Error", "Choose a voice before downloading.", true);
+    return;
+  }
+  
+  if (state.provider !== "googleTranslate") {
+    ui.setStatus("Error", "Downloading is currently only supported for Google Translate.", true);
+    return;
+  }
+
+  ui.setStatus("Loading", "Generating audio for download. Please wait...");
+  
+  try {
+    const voice = getActiveVoices().find((item) => item.id === state.voiceId);
+    let allBlobs = [];
+    
+    for (let j = 0; j < runtime.queue.length; j++) {
+      const chunk = runtime.queue[j];
+      const words = chunk.text.split(/\s+/);
+      const subChunks = [];
+      let current = "";
+      for (const word of words) {
+        if ((current + " " + word).length > 180) {
+          if (current) subChunks.push(current.trim());
+          current = word;
+        } else {
+          current += (current ? " " : "") + word;
+        }
+      }
+      if (current) subChunks.push(current.trim());
+
+      for (let i = 0; i < subChunks.length; i++) {
+        ui.setStatus("Loading", `Generating chunk ${j + 1}/${runtime.queue.length} (sub-part ${i + 1}/${subChunks.length})...`);
+        const response = await fetch("/api/google-translate/speak", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: subChunks[i],
+            lang: voice.lang,
+          }),
+        });
+        if (!response.ok) throw new Error("Synthesis failed");
+        allBlobs.push(await response.blob());
+      }
+    }
+    
+    ui.setStatus("Loading", "Stitching audio together...");
+    const finalBlob = new Blob(allBlobs, { type: "audio/mpeg" });
+    const url = URL.createObjectURL(finalBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = (state.title || "read_aloud_audio").replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".mp3";
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    ui.setStatus("Ready", "Audio downloaded successfully.");
+  } catch (err) {
+    ui.setStatus("Error", "Failed to download audio: " + err.message, true);
+  }
 }

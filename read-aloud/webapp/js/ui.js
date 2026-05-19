@@ -171,7 +171,13 @@ export function createUi(elements, state, runtime, providers, persistState) {
   function setStatus(label, message, isError) {
     elements.playbackStatus.textContent = label;
     elements.statusMessage.textContent = message;
-    elements.playbackStatus.style.color = isError ? "var(--brand-deep)" : "";
+    if (elements.statusCard) {
+      const state = isError ? "error"
+        : label.toLowerCase() === "playing" ? "playing"
+        : label.toLowerCase() === "paused"  ? "paused"
+        : "";
+      elements.statusCard.dataset.state = state;
+    }
   }
 
   return {

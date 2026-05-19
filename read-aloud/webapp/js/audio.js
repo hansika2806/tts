@@ -56,6 +56,8 @@ export function playBlobAudio(blob, playback, controls, playbackRate) {
     const audio = new Audio(playback.currentObjectUrl);
     playback.currentAudio = audio;
     audio.volume = controls.volume;
+    if ('preservesPitch' in audio) audio.preservesPitch = true;
+    audio.defaultPlaybackRate = playbackRate || 1;
     audio.playbackRate = playbackRate || 1;
     audio.onplay = () => controls.onStart?.();
     audio.onended = () => {

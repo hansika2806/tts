@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Translate Hindi Essay Reader</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f3f4f6;
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 800px;
+        }
+        h1 {
+            color: #1f2937;
+            margin-top: 0;
+            font-size: 1.5rem;
+        }
+        p {
+            color: #4b5563;
+        }
+        textarea {
+            width: 100%;
+            height: 300px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-family: inherit;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+        .button-group {
+            display: flex;
+            gap: 1rem;
+        }
+        button {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+        }
+        .btn-play {
+            background-color: #3b82f6;
+            color: white;
+        }
+        .btn-play:hover {
+            background-color: #2563eb;
+        }
+        .btn-stop {
+            background-color: #ef4444;
+            color: white;
+        }
+        .btn-stop:hover {
+            background-color: #dc2828;
+        }
+        .status {
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: #10b981;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🔊 Hindi Essay Reader</h1>
+    <p>Paste your long essay below. This tool splits the text to bypass the Google Translate character limit and reads it continuously.</p>
+    
+    <textarea id="essayText" placeholder="हिंदी में अपना लेख यहाँ लिखें... (Write your essay here...)"></textarea>
+    
+    <div class="button-group">
+        <button id="playBtn" class="btn-play">▶️ Play Essay</button>
+        <button id="stopBtn" class="btn-stop">⏹️ Stop Reading</button>
+    </div>
+
+    <div id="statusText" class="status"></div>
+</div>
+
+<script>
+    const playBtn = document.getElementById('playBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const essayText = document.getElementById('essayText');
+    const statusText = document.getElementById('statusText');
+
+    let currentAudio = null;
+    let isPlaying = false;
+
+    // Split text securely ensuring no chunk exceeds maxLength
+    function chunkText(text, maxLength = 180) {
+        const chunks = [];
+        const words = text.split(/\s+/);
+        let currentChunk = "";
+
+        for (const word of words) {
+            if ((currentChunk + " " + word).length > maxLength) {
+                if (currentChunk) chunks.push(currentChunk.trim());
+                currentChunk = word;
+            } else {
+                currentChunk += (currentChunk ? " " : "") + word;
+            }
+        }
+        if (currentChunk) {
+            chunks.push(currentChunk.trim());
+        }
+        return chunks;
+    }
+
+    playBtn.addEventListener('click', () => {
+        const text = essayText.value.trim();
+        if (!text) return;
+
+        const chunks = chunkText(text);
+        if (chunks.length === 0) return;
+
+        isPlaying = true;
+        statusText.textContent = "Status: Playing...";
+        let currentIndex = 0;
+
+        function playNextChunk() {
+            if (!isPlaying) return;
+            
+            if (currentIndex >= chunks.length) {
+                isPlaying = false;
+                statusText.textContent = "Status: Finished Reading!";
+                setTimeout(() => statusText.textContent = "", 3000);
+                return;
+            }
+
+            const chunk = chunks[currentIndex];
+            const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=hi&q=${encodeURIComponent(chunk)}`;
+            
+            currentAudio = new Audio(url);
+            
+            currentAudio.addEventListener('ended', () => {
+                currentIndex++;
+                playNextChunk();
+            });
+
+            currentAudio.addEventListener('error', () => {
+                console.error("Failed to load chunk, skipping to next.");
+                currentIndex++;
+                playNextChunk();
+            });
+
+            currentAudio.play().catch(e => {
+                console.error("Audio play blocked", e);
+                isPlaying = false;
+                statusText.textContent = "Status: Error playing audio.";
+            });
+        }
+
+        playNextChunk();
+    });
+
+    stopBtn.addEventListener('click', () => {
+        isPlaying = false;
+        if (currentAudio) {
+            currentAudio.pause();
+            currentAudio.currentTime = 0;
+        }
+        statusText.textContent = "Status: Stopped.";
+        setTimeout(() => statusText.textContent = "", 3000);
+    });
+</script>
+
+</body>
+</html>

@@ -3,169 +3,402 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Read Aloud Web</title>
-  <meta
-    name="description"
-    content="Standalone text-to-speech web app inspired by Read Aloud, with native browser voices and official provider integrations."
-  >
+  <title>Read Aloud — Hindi TTS</title>
+  <meta name="description" content="Text-to-speech web app with Google Translate Hindi voice support.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/webapp/styles.css">
 </head>
 <body>
-  <div class="app-shell">
-    <header class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Standalone webapp</p>
-        <h1>Read Aloud Web</h1>
-        <p class="hero-text">
-          A browser-first text-to-speech workspace built from the extension codebase, redesigned for standalone use with official provider integrations where they are technically and legally viable.
-        </p>
-      </div>
-      <div class="hero-meta">
-        <div class="meta-card">
-          <span class="meta-label">Provider parity</span>
-          <strong>Native, Google Translate Experimental, OpenAI, Google Cloud, Amazon Polly, Azure, IBM</strong>
-        </div>
-        <div class="meta-card">
-          <span class="meta-label">Not portable from extension</span>
-          <strong>Read Aloud premium, page injection, phone/Piper/Supertonic</strong>
-        </div>
-      </div>
-    </header>
 
-    <main class="layout">
-      <section class="panel panel-editor">
-        <div class="panel-head">
-          <div>
-            <p class="section-kicker">Input</p>
-            <h2>Compose What Should Be Read</h2>
-          </div>
-          <div class="toolbar">
-            <button id="sample-button" class="button button-ghost" type="button">Sample Text</button>
-            <label class="button button-ghost file-button" for="file-input">Import .txt</label>
-            <input id="file-input" type="file" accept=".txt,text/plain">
-            <label class="button button-ghost file-button" for="pdf-input">Import PDF</label>
-            <input id="pdf-input" type="file" accept="application/pdf,.pdf">
-            <button id="clear-button" class="button button-ghost" type="button">Clear</button>
-          </div>
-        </div>
+  <!-- SIDEBAR NAV -->
+  <nav class="sidebar" role="navigation" aria-label="App sections">
+    <div class="sidebar-brand">
+      <div class="brand-icon">🔊</div>
+      <div>
+        <strong>Read Aloud</strong>
+        <span>Hindi TTS</span>
+      </div>
+    </div>
 
-        <label class="field">
-          <span class="field-label">Title</span>
-          <input id="document-title" type="text" maxlength="120" placeholder="Optional title for this reading session">
+    <ul class="sidebar-nav">
+      <li>
+        <button class="nav-btn is-active" data-tab="compose" type="button" aria-selected="true">
+          <span class="nav-icon">✏️</span>
+          <span class="nav-label">Compose</span>
+        </button>
+      </li>
+      <li>
+        <button class="nav-btn" data-tab="voice" type="button" aria-selected="false">
+          <span class="nav-icon">🎙️</span>
+          <span class="nav-label">Voice & Speed</span>
+        </button>
+      </li>
+      <li>
+        <button class="nav-btn" data-tab="player" type="button" aria-selected="false">
+          <span class="nav-icon">▶️</span>
+          <span class="nav-label">Player</span>
+        </button>
+      </li>
+      <li>
+        <button class="nav-btn" data-tab="pdfreader" type="button" aria-selected="false">
+          <span class="nav-icon">📖</span>
+          <span class="nav-label">PDF Reader</span>
+          <span class="nav-badge" id="pdf-reader-badge" style="display:none">NEW</span>
+        </button>
+      </li>
+      <li>
+        <button class="nav-btn" data-tab="settings" type="button" aria-selected="false">
+          <span class="nav-icon">⚙️</span>
+          <span class="nav-label">API Settings</span>
+        </button>
+      </li>
+    </ul>
+
+    <!-- Mini Player — always visible -->
+    <div class="mini-player" id="mini-player">
+      <div class="mini-player-title">
+        <span id="mini-title">No document loaded</span>
+      </div>
+      <div class="mini-transport">
+        <button id="play-button"   class="transport-btn primary" title="Play"   type="button">▶</button>
+        <button id="pause-button"  class="transport-btn"         title="Pause"  type="button">⏸</button>
+        <button id="resume-button" class="transport-btn"         title="Resume" type="button">⏩</button>
+        <button id="stop-button"   class="transport-btn"         title="Stop"   type="button">⏹</button>
+      </div>
+      <div class="mini-status">
+        <span id="mini-status-badge" class="status-badge">Idle</span>
+        <span id="mini-progress">0 / 0</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <div class="app-content">
+
+    <!-- ====== TAB: COMPOSE ====== -->
+    <section class="tab-pane is-active" id="tab-compose">
+      <div class="page-header">
+        <div>
+          <p class="page-kicker">Step 1</p>
+          <h1>Add Your Text</h1>
+          <p class="page-desc">Type, paste, or import a document to get started.</p>
+        </div>
+        <div class="header-actions">
+          <button id="sample-button" class="btn btn-outline" type="button">Load Sample</button>
+          <button id="clear-button"  class="btn btn-ghost"   type="button">🗑 Clear</button>
+        </div>
+      </div>
+
+      <!-- Import Cards -->
+      <div class="import-grid">
+        <label class="import-card" for="file-input" id="txt-import-card">
+          <input id="file-input" type="file" accept=".txt,text/plain">
+          <div class="import-card-icon">📄</div>
+          <strong>Import .TXT File</strong>
+          <span>Click to browse a plain text file</span>
         </label>
 
-        <label class="field">
-          <span class="field-label">Text</span>
-          <textarea id="text-input" placeholder="Paste or type the text you want to hear."></textarea>
+        <label class="import-card import-card--featured" for="pdf-reader-input" id="pdf-import-card">
+          <div class="import-card-icon">📑</div>
+          <strong>Read PDF Book</strong>
+          <span>Open PDF as a visual book and read along</span>
+          <div class="import-card-badge">NEW</div>
         </label>
+      </div>
+
+      <!-- Or divider -->
+      <div class="divider-row"><span>or type / paste below</span></div>
+
+      <!-- Text Form -->
+      <div class="compose-form">
+        <div class="field">
+          <label class="field-label" for="document-title">Document Title <span class="optional">(optional)</span></label>
+          <input id="document-title" type="text" maxlength="120" placeholder="e.g. My Hindi Essay">
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="text-input">Text to Read</label>
+          <textarea id="text-input" placeholder="Paste your Hindi text here… or import a file above."></textarea>
+        </div>
 
         <div class="stats-row">
           <span id="char-count">0 characters</span>
           <span id="chunk-count">0 reading chunks</span>
         </div>
-      </section>
 
-      <section class="panel panel-voice">
-        <div class="panel-head">
-          <div>
-            <p class="section-kicker">Voice</p>
-            <h2>Choose Provider and Playback</h2>
-          </div>
-          <button id="refresh-voices" class="button button-ghost" type="button">Refresh Voices</button>
+        <div class="compose-actions">
+          <button class="btn btn-primary btn-large" data-tab-goto="player" type="button" id="go-to-player-btn">
+            ▶ Ready — Go to Player
+          </button>
         </div>
+      </div>
+    </section>
 
-        <div id="provider-picker" class="provider-picker" role="radiogroup" aria-label="Voice provider"></div>
+    <!-- ====== TAB: VOICE & SPEED ====== -->
+    <section class="tab-pane" id="tab-voice">
+      <div class="page-header">
+        <div>
+          <p class="page-kicker">Step 2</p>
+          <h1>Voice & Playback</h1>
+          <p class="page-desc">Choose your TTS provider and configure speed, pitch and volume.</p>
+        </div>
+        <button id="refresh-voices" class="btn btn-outline" type="button">↺ Refresh Voices</button>
+      </div>
 
-        <div class="control-grid">
-          <label class="field">
-            <span class="field-label">Provider voice</span>
+      <!-- Provider Picker -->
+      <div class="section-card">
+        <h2 class="section-title">🎙️ Voice Provider</h2>
+        <p class="section-desc">Google Translate works instantly — no API key needed. Cloud providers need credentials (set in API Settings).</p>
+        <div id="provider-picker" class="provider-grid" role="radiogroup" aria-label="Voice provider"></div>
+      </div>
+
+      <!-- Voice & Mode -->
+      <div class="two-col-grid">
+        <div class="section-card">
+          <h2 class="section-title">Voice</h2>
+          <div class="field">
+            <label class="field-label" for="voice-select">Available voices</label>
             <select id="voice-select"></select>
-          </label>
-          <label class="field">
-            <span class="field-label">Reading mode</span>
+          </div>
+        </div>
+        <div class="section-card">
+          <h2 class="section-title">Reading Mode</h2>
+          <div class="field">
+            <label class="field-label" for="chunk-mode">How to split the text</label>
             <select id="chunk-mode">
-              <option value="balanced">Balanced chunks</option>
+              <option value="balanced">Balanced chunks (recommended)</option>
               <option value="paragraphs">Whole paragraphs</option>
-              <option value="sentences">Short sentence chunks</option>
+              <option value="sentences">Short sentences</option>
             </select>
-          </label>
+          </div>
         </div>
+      </div>
 
-        <div class="sliders">
-          <label class="slider-field">
-            <span class="field-label">Rate</span>
-            <input id="rate-input" type="range" min="0.5" max="2" step="0.05" value="1">
-            <output id="rate-output">1.00x</output>
-          </label>
-          <label class="slider-field">
-            <span class="field-label">Pitch</span>
-            <input id="pitch-input" type="range" min="0.5" max="1.5" step="0.05" value="1">
-            <output id="pitch-output">1.00x</output>
-          </label>
-          <label class="slider-field">
-            <span class="field-label">Volume</span>
-            <input id="volume-input" type="range" min="0.1" max="1" step="0.05" value="1">
-            <output id="volume-output">100%</output>
-          </label>
-        </div>
-
-        <div class="transport">
-          <button id="play-button" class="button button-primary" type="button">Play</button>
-          <button id="pause-button" class="button button-secondary" type="button">Pause</button>
-          <button id="resume-button" class="button button-secondary" type="button">Resume</button>
-          <button id="stop-button" class="button button-secondary" type="button">Stop</button>
-        </div>
-
-        <div class="status-card">
-          <span class="status-label">Playback status</span>
-          <strong id="playback-status">Idle</strong>
-          <p id="status-message">Choose a provider, load or paste text, and start playback.</p>
-        </div>
-
-        <div class="credentials-panel">
-          <div class="panel-head panel-head-inline">
-            <div>
-              <p class="section-kicker">Credentials</p>
-              <h2>Provider Settings</h2>
+      <!-- Sliders -->
+      <div class="section-card">
+        <h2 class="section-title">⚡ Playback Controls</h2>
+        <div class="sliders-grid">
+          <div class="slider-item">
+            <div class="slider-header">
+              <label class="field-label" for="rate-input">Speed / Rate</label>
+              <output id="rate-output" class="slider-value">1.00×</output>
             </div>
-            <button id="save-credentials" class="button button-primary" type="button">Save Settings</button>
+            <input id="rate-input" type="range" min="0.5" max="2" step="0.05" value="1">
+            <div class="slider-ticks"><span>0.5×</span><span>1×</span><span>2×</span></div>
           </div>
-          <p class="credentials-note">
-            Browser voices need no key. Google Translate is experimental and proxied through your local server. Cloud providers need your own account credentials. For any shared or public deployment, move secrets behind your own backend proxy.
-          </p>
-          <div id="credentials-forms" class="credentials-forms"></div>
-        </div>
-      </section>
 
-      <section class="panel panel-reader">
-        <div class="panel-head">
-          <div>
-            <p class="section-kicker">Reader</p>
-            <h2>Live Reading Queue</h2>
+          <div class="slider-item">
+            <div class="slider-header">
+              <label class="field-label" for="pitch-input">Pitch</label>
+              <output id="pitch-output" class="slider-value">1.00×</output>
+            </div>
+            <input id="pitch-input" type="range" min="0.5" max="1.5" step="0.05" value="1">
+            <div class="slider-ticks"><span>0.5×</span><span>1×</span><span>1.5×</span></div>
+          </div>
+
+          <div class="slider-item">
+            <div class="slider-header">
+              <label class="field-label" for="volume-input">Volume</label>
+              <output id="volume-output" class="slider-value">100%</output>
+            </div>
+            <input id="volume-input" type="range" min="0.1" max="1" step="0.05" value="1">
+            <div class="slider-ticks"><span>10%</span><span>50%</span><span>100%</span></div>
           </div>
         </div>
-        <div class="reader-header">
-          <div>
-            <span class="meta-label">Current document</span>
-            <strong id="reader-title">Untitled session</strong>
-          </div>
-          <div>
-            <span class="meta-label">Progress</span>
-            <strong id="reader-progress">0 / 0</strong>
-          </div>
+      </div>
+    </section>
+
+    <!-- ====== TAB: PLAYER ====== -->
+    <section class="tab-pane" id="tab-player">
+      <div class="page-header">
+        <div>
+          <p class="page-kicker">Step 3</p>
+          <h1>Player</h1>
+          <p class="page-desc">Play, pause, and follow along with your text as it's read aloud.</p>
+        </div>
+        <button id="download-button" class="btn btn-outline" type="button">⬇ Download MP3</button>
+      </div>
+
+      <!-- Now Reading -->
+      <div class="now-reading-card">
+        <div class="now-reading-meta">
+          <span id="reader-title" class="now-reading-title">Untitled session</span>
+          <span id="reader-progress" class="now-reading-progress">0 / 0</span>
         </div>
         <div id="reader-preview" class="reader-preview empty">
-          Playback highlights active chunks here.
+          Hit Play to start. The current chunk will appear here.
         </div>
+      </div>
+
+      <!-- Status -->
+      <div class="status-card" id="status-card">
+        <div class="status-left">
+          <span class="status-dot" id="status-dot"></span>
+          <div>
+            <strong id="playback-status">Idle</strong>
+            <p id="status-message">Choose a voice in Voice & Playback, then hit Play.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Full Transport -->
+      <div class="transport-bar">
+        <button class="btn btn-primary btn-xl" id="play-button-2"   type="button">▶ Play</button>
+        <button class="btn btn-secondary"      id="pause-button-2"  type="button">⏸ Pause</button>
+        <button class="btn btn-secondary"      id="resume-button-2" type="button">⏩ Resume</button>
+        <button class="btn btn-secondary"      id="stop-button-2"   type="button">⏹ Stop</button>
+      </div>
+
+      <!-- Chunk list -->
+      <div class="section-card">
+        <h2 class="section-title">📋 Reading Queue</h2>
+        <p class="section-desc">Click any chunk to jump to it.</p>
         <div id="chunk-list" class="chunk-list"></div>
-      </section>
-    </main>
-  </div>
+      </div>
+    </section>
+
+    <!-- ====== TAB: PDF READER ====== -->
+    <section class="tab-pane" id="tab-pdfreader">
+      <div class="pdf-reader-layout">
+
+        <!-- LEFT: PDF Viewer -->
+        <div class="pdf-viewer-col">
+          <div class="pdf-viewer-header">
+            <div>
+              <p class="page-kicker">PDF Book</p>
+              <h1 id="pdf-reader-docname">No PDF loaded</h1>
+              <span id="pdf-chunk-indicator" class="pdf-chunk-indicator" style="display:none; margin-top:4px; font-size:0.8rem; background:transparent; border:none; padding:0; color:var(--accent);"></span>
+            </div>
+            <div class="header-actions">
+              <label class="btn btn-primary" for="pdf-reader-input" style="cursor:pointer">📑 Open PDF</label>
+              <input id="pdf-reader-input" type="file" accept="application/pdf,.pdf" style="display:none">
+              
+              <div class="pdf-media-controls" id="pdf-media-controls" style="display:none;">
+                <button id="pdf-prev-chunk" class="media-btn" title="Previous Line">⏪</button>
+                <button id="pdf-read-aloud-btn" class="media-btn media-btn-play" title="Play">▶</button>
+                <button id="pdf-stop-btn" class="media-btn" title="Stop">⏹</button>
+                <button id="pdf-next-chunk" class="media-btn" title="Next Line">⏩</button>
+              </div>
+
+              <button id="pdf-download-btn" class="btn btn-ghost" type="button" disabled>⬇ MP3</button>
+            </div>
+          </div>
+
+          <!-- Rendered pages go here -->
+          <div class="pdf-canvas-area" id="pdf-canvas-area">
+            <div class="pdf-empty-state" id="pdf-empty-state">
+              <div style="font-size:4rem">📑</div>
+              <strong>Open a PDF to start reading</strong>
+              <p>Your PDF will be rendered here. Click any section to start reading from that point.</p>
+              <label class="btn btn-primary btn-large" for="pdf-reader-input" style="cursor:pointer;margin-top:1rem">📂 Open PDF File</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: Controls panel -->
+        <div class="pdf-controls-col">
+          <div class="pdf-control-block">
+            <h2 class="section-title">📋 Reading Queue</h2>
+            <p class="section-desc">Each page is a chunk. Click to jump.</p>
+            <div id="pdf-chunk-list" class="chunk-list"></div>
+          </div>
+
+          <div class="pdf-control-block">
+            <h2 class="section-title">⚡ Speed</h2>
+            <div class="slider-item">
+              <div class="slider-header">
+                <label class="field-label" for="pdf-rate-input">Rate</label>
+                <output id="pdf-rate-output" class="slider-value">1.00×</output>
+              </div>
+              <input id="pdf-rate-input" type="range" min="0.5" max="2" step="0.05" value="1">
+            </div>
+          </div>
+
+          <div class="pdf-control-block">
+            <h2 class="section-title">📊 Status</h2>
+            <div class="pdf-status-card" id="pdf-status-card">
+              <span class="status-dot" id="pdf-status-dot"></span>
+              <div>
+                <strong id="pdf-status-label">Idle</strong>
+                <p id="pdf-status-msg">Open a PDF to begin.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ====== TAB: API SETTINGS ====== -->
+    <section class="tab-pane" id="tab-settings">
+      <div class="page-header">
+        <div>
+          <p class="page-kicker">Optional</p>
+          <h1>API Settings</h1>
+          <p class="page-desc">Enter credentials for cloud providers. Google Translate needs none.</p>
+        </div>
+        <button id="save-credentials" class="btn btn-primary" type="button">💾 Save Settings</button>
+      </div>
+
+      <div class="info-banner">
+        <strong>🔒 Stored in this browser only.</strong>
+        Keys are saved in localStorage. For personal use this is fine. For public deployments, move keys to your own backend.
+      </div>
+
+      <div id="credentials-forms" class="credentials-forms"></div>
+    </section>
+
+  </div><!-- /app-content -->
 
   <script src="/js/aws-sdk.js"></script>
   <script type="module" src="/webapp/js/main.js"></script>
+  <script>
+    // Tab navigation
+    document.addEventListener('DOMContentLoaded', () => {
+      function switchTab(tabId) {
+        document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('is-active'));
+        document.querySelectorAll('.nav-btn').forEach(b => { b.classList.remove('is-active'); b.setAttribute('aria-selected', 'false'); });
+        const pane = document.getElementById('tab-' + tabId);
+        if (pane) pane.classList.add('is-active');
+        const btn = document.querySelector(`[data-tab="${tabId}"]`);
+        if (btn) { btn.classList.add('is-active'); btn.setAttribute('aria-selected', 'true'); }
+      }
+
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+      });
+
+      // "Go to Player" shortcut button
+      document.getElementById('go-to-player-btn')?.addEventListener('click', () => switchTab('player'));
+
+      // Wire duplicate transport buttons in Player tab to the sidebar mini-player buttons
+      ['play','pause','resume','stop'].forEach(action => {
+        const sidebar = document.getElementById(action + '-button');
+        const player  = document.getElementById(action + '-button-2');
+        if (player && sidebar) {
+          player.addEventListener('click', () => sidebar.click());
+        }
+      });
+
+      // Sync mini-player title & status from main elements
+      const obs = new MutationObserver(() => {
+        const t = document.getElementById('reader-title')?.textContent;
+        const p = document.getElementById('reader-progress')?.textContent;
+        const s = document.getElementById('playback-status')?.textContent;
+        if (t) document.getElementById('mini-title').textContent = t;
+        if (p) document.getElementById('mini-progress').textContent = p;
+        if (s) {
+          document.getElementById('mini-status-badge').textContent = s;
+          document.getElementById('mini-status-badge').className = 'status-badge status-' + s.toLowerCase();
+        }
+      });
+      ['reader-title','reader-progress','playback-status'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) obs.observe(el, { childList: true, characterData: true, subtree: true });
+      });
+    });
+  </script>
 </body>
 </html>

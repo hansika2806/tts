@@ -42,16 +42,45 @@ export function createProviders(state, playback) {
         return voices;
       },
       async speak(chunk, voiceEntry, controls) {
-        const response = await fetch("/api/google-translate/speak", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: chunk.text,
-            lang: voiceEntry.lang,
-          }),
-        });
-        if (!response.ok) throw new Error(await extractProviderError(response, "Google Translate synthesis failed"));
-        return playBlobAudio(await response.blob(), playback, controls, controls.rate);
+        // Sub-chunk text because the Google Translate batchexecute API fails if text > 200 characters
+        const words = chunk.text.split(/\s+/);
+        const subChunks = [];
+        let current = "";
+        for (const word of words) {
+          if ((current + " " + word).length > 180) {
+            if (current) subChunks.push(current.trim());
+            current = word;
+          } else {
+            current += (current ? " " : "") + word;
+          }
+        }
+        if (current) subChunks.push(current.trim());
+
+        // Play each sub-chunk sequentially to preserve continuous playback
+        for (let i = 0; i < subChunks.length; i++) {
+          if (playback.stopRequested) break;
+          
+          const response = await fetch("/api/google-translate/speak", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text: subChunks[i],
+              lang: voiceEntry.lang,
+            }),
+          });
+          
+          if (!response.ok) throw new Error(await extractProviderError(response, "Google Translate synthesis failed"));
+          
+          // Only trigger onStart for the very first sub-chunk
+          const subControls = { 
+            ...controls, 
+            onStart: i === 0 ? controls.onStart : undefined,
+            // Skip word boundary highlights for sub-chunks to avoid desync
+            onBoundary: undefined 
+          };
+          
+          await playBlobAudio(await response.blob(), playback, subControls, controls.rate);
+        }
       },
     },
     openai: {
