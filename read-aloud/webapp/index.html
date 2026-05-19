@@ -7,15 +7,25 @@
   <meta name="description" content="Text-to-speech web app with Google Translate Hindi voice support.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/webapp/styles.css">
 </head>
 <body>
 
+  <!-- Decorative aurora mesh (visual only) -->
+  <div class="aurora-layer" aria-hidden="true">
+    <span class="aurora-blob aurora-blob--1"></span>
+    <span class="aurora-blob aurora-blob--2"></span>
+    <span class="aurora-blob aurora-blob--3"></span>
+  </div>
+
   <!-- SIDEBAR NAV -->
   <nav class="sidebar" role="navigation" aria-label="App sections">
     <div class="sidebar-brand">
-      <div class="brand-icon">🔊</div>
+      <div class="brand-icon-wrap">
+        <span class="brand-icon-ring" aria-hidden="true"></span>
+        <div class="brand-icon">🔊</div>
+      </div>
       <div>
         <strong>Read Aloud</strong>
         <span>Hindi TTS</span>
@@ -58,6 +68,7 @@
 
     <!-- Mini Player — always visible -->
     <div class="mini-player" id="mini-player">
+      <div class="mini-player-progress" aria-hidden="true"></div>
       <div class="mini-player-title">
         <span id="mini-title">No document loaded</span>
       </div>
@@ -95,13 +106,13 @@
       <div class="import-grid">
         <label class="import-card" for="file-input" id="txt-import-card">
           <input id="file-input" type="file" accept=".txt,text/plain">
-          <div class="import-card-icon">📄</div>
+          <span class="import-card-icon">📄</span>
           <strong>Import .TXT File</strong>
           <span>Click to browse a plain text file</span>
         </label>
 
         <label class="import-card import-card--featured" for="pdf-reader-input" id="pdf-import-card">
-          <div class="import-card-icon">📑</div>
+          <span class="import-card-icon">📑</span>
           <strong>Read PDF Book</strong>
           <span>Open PDF as a visual book and read along</span>
           <div class="import-card-badge">NEW</div>
@@ -129,7 +140,7 @@
         </div>
 
         <div class="compose-actions">
-          <button class="btn btn-primary btn-large" data-tab-goto="player" type="button" id="go-to-player-btn">
+          <button class="btn btn-primary btn-large btn-cta-glow" data-tab-goto="player" type="button" id="go-to-player-btn">
             ▶ Ready — Go to Player
           </button>
         </div>
@@ -244,7 +255,7 @@
       </div>
 
       <!-- Full Transport -->
-      <div class="transport-bar">
+      <div class="transport-bar transport-pill">
         <button class="btn btn-primary btn-xl" id="play-button-2"   type="button">▶ Play</button>
         <button class="btn btn-secondary"      id="pause-button-2"  type="button">⏸ Pause</button>
         <button class="btn btn-secondary"      id="resume-button-2" type="button">⏩ Resume</button>
@@ -269,17 +280,17 @@
             <div>
               <p class="page-kicker">PDF Book</p>
               <h1 id="pdf-reader-docname">No PDF loaded</h1>
-              <span id="pdf-chunk-indicator" class="pdf-chunk-indicator" style="display:none; margin-top:4px; font-size:0.8rem; background:transparent; border:none; padding:0; color:var(--accent);"></span>
+              <span id="pdf-chunk-indicator" class="pdf-chunk-indicator" style="display:none; margin-top:4px;"></span>
             </div>
             <div class="header-actions">
               <label class="btn btn-primary" for="pdf-reader-input" style="cursor:pointer">📑 Open PDF</label>
               <input id="pdf-reader-input" type="file" accept="application/pdf,.pdf" style="display:none">
               
               <div class="pdf-media-controls" id="pdf-media-controls" style="display:none;">
-                <button id="pdf-prev-chunk" class="media-btn" title="Previous Line">⏪</button>
-                <button id="pdf-read-aloud-btn" class="media-btn media-btn-play" title="Play">▶</button>
-                <button id="pdf-stop-btn" class="media-btn" title="Stop">⏹</button>
-                <button id="pdf-next-chunk" class="media-btn" title="Next Line">⏩</button>
+                <button type="button" id="pdf-prev-chunk" class="media-btn" title="Previous section">⏪</button>
+                <button type="button" id="pdf-read-aloud-btn" class="media-btn media-btn-play" title="Play">▶</button>
+                <button type="button" id="pdf-stop-btn" class="media-btn" title="Stop">⏹</button>
+                <button type="button" id="pdf-next-chunk" class="media-btn" title="Next section">⏩</button>
               </div>
 
               <button id="pdf-download-btn" class="btn btn-ghost" type="button" disabled>⬇ MP3</button>
@@ -364,6 +375,7 @@
         if (pane) pane.classList.add('is-active');
         const btn = document.querySelector(`[data-tab="${tabId}"]`);
         if (btn) { btn.classList.add('is-active'); btn.setAttribute('aria-selected', 'true'); }
+        document.body.classList.toggle('is-pdf-tab', tabId === 'pdfreader');
       }
 
       document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -398,6 +410,11 @@
         const el = document.getElementById(id);
         if (el) obs.observe(el, { childList: true, characterData: true, subtree: true });
       });
+
+      document.body.classList.toggle(
+        'is-pdf-tab',
+        document.querySelector('.nav-btn.is-active')?.dataset.tab === 'pdfreader'
+      );
     });
   </script>
 </body>
