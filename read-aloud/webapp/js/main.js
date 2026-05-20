@@ -1,10 +1,11 @@
 import { persistState, loadState, flushPersist } from "./storage.js";
 import { createProviders } from "./providers.js";
 import { createUi } from "./ui.js";
-import { releaseAudioResources } from "./audio.js";
+import { effectivePlaybackVolume, releaseAudioResources } from "./audio.js";
 import { buildChunks } from "./queue.js";
 import { buildChapterIndex } from "./chapters.js";
 import { updateLoadProgress, hideLoadProgress } from "./book-load-progress.js";
+import { setActiveBookType } from "./session-context.js";
 import {
   initFlipbook,
   onPageAudioDone,
@@ -12,7 +13,11 @@ import {
   syncFlipbookToChunk,
   setPdfDisplayQueue,
   refreshPdfListenView,
-} from "./pdf-flipbook.js?v=reader-recovery";
+  refreshPdfAdvancedView,
+  getPdfReaderMode,
+  getPdfCurrentPage,
+  isPdfExtractionBusy,
+} from "./pdf-flipbook.js?v=extract-finish";
 import { createNovelFeatures } from "./novel-features.js";
 import {
   listBooks,
@@ -122,6 +127,9 @@ const state = {
   replayOnce: false,
   listenLayoutActive: false,
   contentsPanelOpen: persisted.contentsPanelOpen ?? false,
+  epubReaderMode: persisted.epubReaderMode || "listen",
+  novelFontId: persisted.novelFontId || "literata",
+  novelSizeId: persisted.novelSizeId || "roomy",
 };
 
 const runtime = {
@@ -182,6 +190,7 @@ async function initialize() {
     goToChunk(startChunk);
     ui.updateListenContents();
     refreshPdfListenView(runtime);
+    refreshPdfAdvancedView(runtime);
     if (chapterChanged) {
       await ui.playChapterTransition(next, { completedPrevious: true });
     }
@@ -213,55 +222,43 @@ async function initialize() {
   pdfApi = initFlipbook({
     onPdfLoaded: (file, url) => {
       console.log("PDF loaded in flipbook:", file.name);
+      setActiveBookType("pdf");
+      stopPlayback({ silent: true });
+      if (isPdfExtractionBusy()) {
+        window.__pdfListenRuntime = runtime;
+        return;
+      }
       runtime.queue = [];
       runtime.chapters = [];
       runtime.currentIndex = -1;
+      // ── FIX: expose the cleared runtime immediately so renderPdfQueue()
+      //         no longer shows stale EPUB chapters in the PDF sidebar.
+      window.__pdfListenRuntime = runtime;
       setPdfDisplayQueue([]);
       ui.renderQueue();
       ui.updateListenContents();
     },
-    onExtractionProgress: (progress) => {
-      if (!progress.pdfChunks?.length && !progress.fullText?.trim()) {
-        updateLoadProgress({
-          page: progress.pageNumber,
-          totalPages: progress.totalPages,
-          chaptersReady: 0,
-          sectionsReady: 0,
-          done: false,
-        });
+    onTextExtracted: (pdfChunks, meta) => {
+      if (!pdfChunks?.length) {
+        window.__pdfListenRuntime = runtime;
         return;
       }
-      runtime.queue = buildPdfPlaybackQueue(progress.pdfChunks, {
-        fullText: progress.fullText,
-        pageTexts: progress.pageTexts,
+      runtime.queue = buildPdfPlaybackQueue(pdfChunks, {
+        ...meta,
+        fromPdfExtraction: true,
       });
-      runtime.chapters = buildChapterIndex(runtime.queue);
-      if (runtime.currentIndex < 0 && runtime.queue.length) runtime.currentIndex = 0;
-      setPdfDisplayQueue(runtime.queue);
-      ui.renderQueue();
-      ui.updateListenContents();
-      refreshPdfListenView(runtime);
-      updateLoadProgress({
-        page: progress.pageNumber,
-        totalPages: progress.totalPages,
-        chaptersReady: runtime.chapters.length,
-        sectionsReady: runtime.queue.length,
-        done: progress.done,
-      });
-      if (progress.done) hideLoadProgress();
-    },
-    onTextExtracted: (pdfChunks, meta) => {
-      runtime.queue = buildPdfPlaybackQueue(pdfChunks, meta);
       runtime.chapters = buildChapterIndex(runtime.queue);
       if (runtime.currentIndex < 0 && runtime.queue.length) runtime.currentIndex = 0;
       runtime.currentIndex = Math.min(
         Math.max(0, state.resumeChunkIndex || meta?.restoreChunk || 0),
         Math.max(0, runtime.queue.length - 1)
       );
+      window.__pdfListenRuntime = runtime;
       setPdfDisplayQueue(runtime.queue);
       ui.renderQueue();
       ui.updateListenContents();
       refreshPdfListenView(runtime);
+      refreshPdfAdvancedView(runtime);
       hideLoadProgress();
     },
     onPlayRequested: (chunkIdx) => {
@@ -276,10 +273,79 @@ async function initialize() {
       if (runtime.currentIndex < runtime.queue.length - 1) goToChunk(runtime.currentIndex + 1);
     },
     onPageFlip: (pageNum) => {
-      console.log("Page flipped to", pageNum);
+      savePdfBookProgress({
+        pageIndex: Math.max(0, pageNum - 1),
+        pdfReaderMode: getPdfReaderMode(),
+      });
+    },
+    onReaderModeChange: (mode, meta) => {
+      savePdfBookProgress({
+        pdfReaderMode: mode,
+        chunkIndex: meta?.chunkIndex ?? runtime.currentIndex,
+        pageIndex: meta?.pageIndex ?? getPdfCurrentPage() - 1,
+      });
     },
     onStopTts: () => stopPlayback(),
     onListenLayoutChange: () => ui.updateListenContents(),
+  });
+
+  window.__novelTypographySettings = {
+    fontId: state.novelFontId,
+    sizeId: state.novelSizeId,
+  };
+  window.__onNovelTypographyChange = (next) => {
+    state.novelFontId = next.fontId;
+    state.novelSizeId = next.sizeId;
+    window.__novelTypographySettings = next;
+    persistState(state);
+  };
+
+  const resetEpubReaderDom = () => {
+    if (elements.readerPreview) elements.readerPreview.innerHTML = "";
+  };
+  document.getElementById("player-mode-listen")?.addEventListener("click", () => {
+    state.epubReaderMode = "listen";
+    persistState(state);
+    document.getElementById("player-mode-listen")?.classList.add("is-active");
+    document.getElementById("player-mode-advanced")?.classList.remove("is-active");
+    resetEpubReaderDom();
+    ui.updateListenContents();
+    ui.updateReaderPreview();
+  });
+  document.getElementById("player-mode-advanced")?.addEventListener("click", () => {
+    state.epubReaderMode = "advanced";
+    persistState(state);
+    document.getElementById("player-mode-advanced")?.classList.add("is-active");
+    document.getElementById("player-mode-listen")?.classList.remove("is-active");
+    resetEpubReaderDom();
+    ui.updateListenContents();
+    ui.updateReaderPreview();
+  });
+  if (state.epubReaderMode === "advanced") {
+    document.getElementById("player-mode-advanced")?.classList.add("is-active");
+    document.getElementById("player-mode-listen")?.classList.remove("is-active");
+  }
+
+  function goToAdjacentChapter(delta) {
+    const chapters = runtime.chapters;
+    if (!chapters?.length || runtime.currentIndex < 0) return;
+    const ci = runtime.queue[runtime.currentIndex]?.chapterIndex ?? 0;
+    const idx = chapters.findIndex((c) => c.chapterIndex === ci);
+    const target = chapters[idx + delta];
+    if (target) {
+      if (typeof state.onChapterJump === "function") {
+        state.onChapterJump(target.startChunk);
+      } else {
+        goToChunk(target.startChunk);
+      }
+    }
+  }
+
+  document.getElementById("epub-prev-chapter")?.addEventListener("click", () => {
+    goToAdjacentChapter(-1);
+  });
+  document.getElementById("epub-next-chapter")?.addEventListener("click", () => {
+    goToAdjacentChapter(1);
   });
 
   await refreshVoices();
@@ -477,6 +543,7 @@ async function openBook(book, { switchTab = true } = {}) {
   book.lastOpenedAt = Date.now();
 
   if (book.type === "pdf" && book.pdfBlob) {
+    setActiveBookType("pdf");
     state.listenLayoutActive = false;
     runtime.chapters = [];
     runtime.queue = [];
@@ -487,6 +554,7 @@ async function openBook(book, { switchTab = true } = {}) {
     return;
   }
 
+  setActiveBookType(book.type === "txt" ? "txt" : "epub");
   state.text = book.text || "";
   elements.textInput.value = state.text;
   elements.titleInput.value = state.title;
@@ -500,7 +568,13 @@ async function openBook(book, { switchTab = true } = {}) {
   runtime.currentIndex = Math.min(state.resumeChunkIndex, runtime.queue.length - 1);
   ui.renderQueue(true);
   ui.renderBookExperience(book, {
-    onChapter: (chunkIndex) => goToChunk(chunkIndex),
+    onChapter: (chunkIndex) => {
+      if (typeof state.onChapterJump === "function") {
+        state.onChapterJump(chunkIndex);
+      } else {
+        goToChunk(chunkIndex);
+      }
+    },
   });
   await saveBook(book);
   persistState(state, true);
@@ -525,7 +599,7 @@ async function saveActiveBookProgress() {
 }
 
 function savePdfBookProgress(progress) {
-  if (!activeBook) return;
+  if (!activeBook || activeBook.type !== "pdf") return;
   activeBook.progress = { ...activeBook.progress, ...progress };
   saveBook(activeBook);
 }
@@ -537,20 +611,47 @@ function goToChunk(index) {
   ui.renderQueue(true);
   syncFlipbookToChunk(index, runtime);
   refreshPdfListenView(runtime);
+  refreshPdfAdvancedView(runtime);
+  savePdfBookProgress({
+    chunkIndex: index,
+    chapterIndex: runtime.queue[index]?.chapterIndex ?? 0,
+    pageIndex: runtime.queue[index]?.pageIndex ?? 0,
+    pdfReaderMode: getPdfReaderMode(),
+  });
   ui.updateListenContents();
   // NOTE: Do NOT call state.onChunkChange here — it calls goToChunk, causing infinite recursion.
   // Callers that need side-effects (stop/restart playback) must handle them directly.
 }
 
 function buildPdfPlaybackQueue(pdfChunks, meta) {
+  if (!Array.isArray(pdfChunks) || !pdfChunks.length) return [];
+
+  const pageMapped = pdfChunks.every(
+    (chunk) => typeof chunk.text === "string" && typeof chunk.pageIndex === "number"
+  );
+
+  // PDF extraction already produced page-scoped sections — never re-chunk the whole book.
+  if (pageMapped || meta?.fromPdfExtraction) {
+    return pdfChunks.map((chunk, index) => ({
+      id: index,
+      chunkIndex: index,
+      text: chunk.text,
+      pageIndex: chunk.pageIndex ?? 0,
+      chapterIndex: chunk.pageIndex ?? 0,
+      chapterTitle: chunk.chapterTitle || `Page ${(chunk.pageIndex ?? 0) + 1}`,
+      source: "pdf",
+    }));
+  }
+
   const fullText =
     meta?.fullText?.trim() ||
     pdfChunks.map((c) => c.text).join("\n\n").trim();
   if (!fullText) {
     return pdfChunks.map((chunk, index) => ({
-      ...chunk,
       id: index,
       chunkIndex: index,
+      text: chunk.text,
+      pageIndex: chunk.pageIndex ?? 0,
       chapterIndex: chunk.pageIndex ?? 0,
       chapterTitle: `Page ${(chunk.pageIndex ?? 0) + 1}`,
       source: "pdf",
@@ -667,7 +768,16 @@ function onVolumeChange() {
   state.volume = Number(elements.volumeInput.value);
   elements.volumeOutput.value = `${Math.round(state.volume * 100)}%`;
   persistState(state);
-  if (runtime.currentAudio) runtime.currentAudio.volume = state.volume;
+  const rate = novel?.effectiveRate?.() ?? state.rate;
+  if (runtime.currentAudio) {
+    runtime.currentAudio.volume = effectivePlaybackVolume(
+      state.volume,
+      runtime.currentAudio.playbackRate || rate
+    );
+  }
+  if (runtime.currentUtterance) {
+    runtime.currentUtterance.volume = effectivePlaybackVolume(state.volume, rate);
+  }
 }
 
 async function startPlayback() {
@@ -761,6 +871,7 @@ async function playQueueFromCurrentIndex() {
           runtime.activeWordRange = { chunkIndex: runtime.currentIndex, start, end };
           ui.updateReaderPreview();
           refreshPdfListenView(runtime);
+          refreshPdfAdvancedView(runtime);
         },
       });
       if (replay && !runtime.stopRequested) continue;
@@ -783,7 +894,9 @@ async function playQueueFromCurrentIndex() {
       savePdfBookProgress({
         chunkIndex: runtime.currentIndex,
         chapterIndex: prevChapter,
+        pageIndex: raw.pageIndex ?? 0,
         pageCount: Math.max(activeBook?.progress?.pageCount || 0, (raw.pageIndex ?? 0) + 1),
+        pdfReaderMode: getPdfReaderMode(),
       });
     }
     // NOTE: Do NOT call state.onChunkChange during playback — it triggers stopPlayback()+startPlayback()
@@ -846,12 +959,14 @@ function stopPlayback(options = {}) {
   ui.setTransportState();
   ui.updateReaderPreview();
   refreshPdfListenView(runtime);
+  refreshPdfAdvancedView(runtime);
   ui.renderQueue(false);
   if (!options.silent) ui.setStatus("Stopped", "Playback stopped.");
   saveActiveBookProgress();
 }
 
 function clearActiveBookSession({ persist = false } = {}) {
+  setActiveBookType(null);
   activeBook = null;
   state.activeBookId = "";
   state.text = "";
@@ -875,6 +990,7 @@ function clearActiveBookSession({ persist = false } = {}) {
   ui.updateReaderProgress();
   ui.updateReaderPreview();
   ui.renderBookExperience(null);
+  ui.updateListenContents();
   ui.setTransportState();
   persistState(state, persist);
 }

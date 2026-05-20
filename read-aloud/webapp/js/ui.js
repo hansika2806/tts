@@ -4,6 +4,7 @@ import { buildChapterIndex } from "./chapters.js";
 import { escapeHtml, renderTextWithActiveWord, debounce } from "./utils.js";
 import { renderLibraryGrid } from "./library-ui.js";
 import { renderChapterTOC, syncChapterTOCActive } from "./chapter-toc.js";
+import { applyNovelTypography, ensureNovelTypographyToolbar } from "./novel-typography.js";
 
 const MAX_QUEUE_DOM = 80;
 
@@ -331,7 +332,10 @@ export function createUi(elements, state, runtime, providers, persistState) {
         : [];
 
     const isPdfTab = document.body.classList.contains("is-pdf-tab");
-    const pdfListenActive = isPdfTab && document.body.classList.contains("pdf-mode-listen");
+    const pdfListenActive =
+      isPdfTab &&
+      (document.body.classList.contains("pdf-mode-listen") ||
+        document.body.classList.contains("pdf-mode-advanced"));
     const listenActive =
       state.listenLayoutActive ||
       runtime.mode === "playing" ||
@@ -339,11 +343,29 @@ export function createUi(elements, state, runtime, providers, persistState) {
 
     document.body.classList.toggle("is-listen-layout", hasQueue && (listenActive || pdfListenActive));
 
+    const epubToggle = document.getElementById("epub-reader-mode-toggle");
+    const isEpubSession = hasQueue && !isPdfTab;
+    if (epubToggle) epubToggle.hidden = !isEpubSession;
+    document.body.classList.toggle(
+      "epub-mode-advanced",
+      isEpubSession && state.epubReaderMode === "advanced"
+    );
+
+    const epubAdvancedActive =
+      isEpubSession && state.epubReaderMode === "advanced";
     const playerPanel = document.getElementById("listen-contents-panel");
     if (playerPanel) {
-      playerPanel.hidden = !hasQueue || !chapters.length || isPdfTab || !listenActive;
+      const showPlayerToc =
+        hasQueue &&
+        chapters.length &&
+        !isPdfTab &&
+        (listenActive || epubAdvancedActive);
+      playerPanel.hidden = !showPlayerToc;
       if (!playerPanel.hidden) {
-        playerPanel.classList.toggle("is-collapsed", !state.contentsPanelOpen);
+        playerPanel.classList.toggle(
+          "is-collapsed",
+          !state.contentsPanelOpen
+        );
         const collapseBtn = document.getElementById("contents-collapse-btn");
         const expandBtn = document.getElementById("contents-expand-btn");
         if (collapseBtn) collapseBtn.hidden = !state.contentsPanelOpen;
@@ -355,29 +377,61 @@ export function createUi(elements, state, runtime, providers, persistState) {
       elements.bookExperience.hidden = !hasQueue || listenActive || isPdfTab;
     }
 
-    if (hasQueue && chapters.length) {
-      const onChapter = (startChunk) => {
-        if (typeof state.onChapterJump === "function") state.onChapterJump(startChunk);
-        else if (typeof state.onChunkChange === "function") state.onChunkChange(startChunk);
-      };
-      renderChapterTOC({
-        listEl: document.getElementById("player-listen-toc-list"),
-        countEl: document.getElementById("player-listen-toc-count"),
-        chapters,
-        runtime,
-        onChapter,
-      });
-      renderChapterTOC({
-        listEl: document.getElementById("pdf-listen-toc-list"),
-        countEl: document.getElementById("pdf-listen-toc-count"),
-        chapters,
-        runtime,
-        onChapter,
-      });
+    const onChapter = (startChunk) => {
+      if (typeof state.onChapterJump === "function") state.onChapterJump(startChunk);
+      else if (typeof state.onChunkChange === "function") state.onChunkChange(startChunk);
+    };
+
+    const playerTocList = document.getElementById("player-listen-toc-list");
+    const playerTocCount = document.getElementById("player-listen-toc-count");
+    const pdfTocList = document.getElementById("pdf-listen-toc-list");
+    const pdfTocCount = document.getElementById("pdf-listen-toc-count");
+
+    const pdfTab = isPdfTab;
+    const epubTab = !isPdfTab;
+
+    if (pdfTab) {
+      if (hasQueue && chapters.length) {
+        renderChapterTOC({ listEl: pdfTocList, countEl: pdfTocCount, chapters, runtime, onChapter });
+      } else {
+        renderChapterTOC({ listEl: pdfTocList, countEl: pdfTocCount, chapters: [], runtime, onChapter });
+      }
+      renderChapterTOC({ listEl: playerTocList, countEl: playerTocCount, chapters: [], runtime, onChapter });
+    } else if (epubTab) {
+      if (hasQueue && chapters.length) {
+        renderChapterTOC({ listEl: playerTocList, countEl: playerTocCount, chapters, runtime, onChapter });
+      } else {
+        renderChapterTOC({ listEl: playerTocList, countEl: playerTocCount, chapters: [], runtime, onChapter });
+      }
+      renderChapterTOC({ listEl: pdfTocList, countEl: pdfTocCount, chapters: [], runtime, onChapter });
     }
 
-    syncChapterTOCActive(document.getElementById("player-listen-toc-list"), runtime);
-    syncChapterTOCActive(document.getElementById("pdf-listen-toc-list"), runtime);
+    syncChapterTOCActive(playerTocList, runtime);
+    syncChapterTOCActive(pdfTocList, runtime);
+
+    updateEpubChapterNav(runtime, epubAdvancedActive);
+  }
+
+  function updateEpubChapterNav(runtime, visible) {
+    const nav = document.getElementById("epub-chapter-nav");
+    if (!nav) return;
+    nav.hidden = !visible;
+    if (!visible) return;
+
+    const chunk = runtime.queue[runtime.currentIndex];
+    const chapterIndex = chunk?.chapterIndex ?? 0;
+    const chapters = runtime.chapters || [];
+    const idx = chapters.findIndex((c) => c.chapterIndex === chapterIndex);
+    const chapter = chapters[idx];
+    const titleEl = document.getElementById("epub-chapter-nav-title");
+    if (titleEl) {
+      titleEl.textContent = chapter?.title || chunk?.chapterTitle || "Chapter";
+    }
+
+    const prevBtn = document.getElementById("epub-prev-chapter");
+    const nextBtn = document.getElementById("epub-next-chapter");
+    if (prevBtn) prevBtn.disabled = idx <= 0;
+    if (nextBtn) nextBtn.disabled = idx < 0 || idx >= chapters.length - 1;
   }
 
   function playChapterTransition(chunk, { completedPrevious = true } = {}) {
@@ -437,6 +491,11 @@ export function createUi(elements, state, runtime, providers, persistState) {
 
   function updateReaderPreview() {
     const chunk = runtime.queue[runtime.currentIndex];
+    const advanced = state.epubReaderMode === "advanced";
+    elements.readerPreview?.classList.toggle("is-epub-advanced", advanced);
+    const card = elements.readerPreview?.closest(".now-reading-card");
+    card?.classList.toggle("is-epub-advanced-card", advanced);
+
     if (!chunk) {
       elements.readerPreview.classList.add("empty");
       elements.readerPreview.textContent = "Press Play to start listening.";
@@ -446,9 +505,29 @@ export function createUi(elements, state, runtime, providers, persistState) {
     elements.readerPreview.classList.remove("empty");
     elements.readerPreview.classList.add("chunk-animate");
 
+    if (advanced) {
+      applyNovelTypography(elements.readerPreview, {
+        fontId: state.novelFontId,
+        sizeId: state.novelSizeId,
+      });
+      ensureNovelTypographyToolbar(elements.readerPreview, {
+        fontId: state.novelFontId,
+        sizeId: state.novelSizeId,
+        onChange: (next) => {
+          state.novelFontId = next.fontId;
+          state.novelSizeId = next.sizeId;
+          persistState(state);
+          applyNovelTypography(elements.readerPreview, next);
+        },
+      });
+    } else {
+      elements.readerPreview.querySelector(".novel-typography-wrap")?.remove();
+    }
+
     const currentChapter = chunk.chapterIndex ?? 0;
 
-    let needsRebuild = !elements.readerPreview.querySelector(".reader-paragraph");
+    const bodySelector = advanced ? ".epub-advanced-body" : ".reader-paragraph";
+    let needsRebuild = !elements.readerPreview.querySelector(bodySelector);
     if (!needsRebuild && currentlyRenderedWindow) {
       if (currentlyRenderedWindow.chapter !== currentChapter) needsRebuild = true;
       if (runtime.currentIndex < currentlyRenderedWindow.start) needsRebuild = true;
@@ -469,28 +548,78 @@ export function createUi(elements, state, runtime, providers, persistState) {
       
       currentlyRenderedWindow = { chapter: currentChapter, start: startIndex, end: endIndex };
 
-      // Build DOM
-      const fragment = document.createDocumentFragment();
-      for (let i = startIndex; i <= endIndex; i++) {
-        const p = document.createElement("p");
-        p.className = "reader-paragraph";
-        p.dataset.chunkIndex = i;
-        p.textContent = runtime.queue[i].text;
-        
-        // Double clicking a paragraph jumps playback there
-        p.addEventListener("dblclick", () => {
-          runtime.currentIndex = i;
-          runtime.activeWordRange = null;
-          renderQueue(false);
-          updateReaderPreview();
-          if (state.onChunkChange) state.onChunkChange(i);
-        });
-        
-        fragment.appendChild(p);
-      }
+      const chapterMeta = runtime.chapters?.find((c) => c.chapterIndex === currentChapter);
+      const chapterTitle = chunk.chapterTitle || chapterMeta?.title || `Chapter ${currentChapter + 1}`;
+      const partTotal = chapterMeta
+        ? chapterMeta.endChunk - chapterMeta.startChunk + 1
+        : endIndex - startIndex + 1;
+
       elements.readerPreview.innerHTML = "";
-      elements.readerPreview.appendChild(fragment);
+
+      if (advanced) {
+        const hero = document.createElement("header");
+        hero.className = "epub-advanced-hero pdf-advanced-hero";
+        hero.innerHTML = `
+          <p class="pdf-advanced-kicker">Chapter ${currentChapter + 1}</p>
+          <div class="pdf-advanced-ornament" aria-hidden="true"><span></span><span></span><span></span></div>
+          <h1 class="pdf-advanced-title">${escapeHtml(chapterTitle)}</h1>
+          <p class="pdf-advanced-meta">${partTotal} parts in this chapter</p>
+        `;
+
+        const body = document.createElement("article");
+        body.className = "epub-advanced-body pdf-advanced-body";
+        for (let i = startIndex; i <= endIndex; i += 1) {
+          const p = document.createElement("p");
+          p.className = "advanced-verse reader-paragraph";
+          p.dataset.chunkIndex = String(i);
+          p.textContent = runtime.queue[i].text;
+          p.addEventListener("dblclick", () => {
+            runtime.currentIndex = i;
+            runtime.activeWordRange = null;
+            renderQueue(false);
+            updateReaderPreview();
+            if (state.onChunkChange) state.onChunkChange(i);
+          });
+          body.appendChild(p);
+        }
+        elements.readerPreview.appendChild(hero);
+        elements.readerPreview.appendChild(body);
+
+        applyNovelTypography(elements.readerPreview, {
+          fontId: state.novelFontId,
+          sizeId: state.novelSizeId,
+        });
+        ensureNovelTypographyToolbar(elements.readerPreview, {
+          fontId: state.novelFontId,
+          sizeId: state.novelSizeId,
+          onChange: (next) => {
+            state.novelFontId = next.fontId;
+            state.novelSizeId = next.sizeId;
+            persistState(state);
+            applyNovelTypography(elements.readerPreview, next);
+          },
+        });
+      } else {
+        const fragment = document.createDocumentFragment();
+        for (let i = startIndex; i <= endIndex; i += 1) {
+          const p = document.createElement("p");
+          p.className = "reader-paragraph";
+          p.dataset.chunkIndex = String(i);
+          p.textContent = runtime.queue[i].text;
+          p.addEventListener("dblclick", () => {
+            runtime.currentIndex = i;
+            runtime.activeWordRange = null;
+            renderQueue(false);
+            updateReaderPreview();
+            if (state.onChunkChange) state.onChunkChange(i);
+          });
+          fragment.appendChild(p);
+        }
+        elements.readerPreview.appendChild(fragment);
+      }
     }
+
+    updateEpubChapterNav(runtime, advanced);
 
     // Update active word highlighting and styling
     const paragraphs = elements.readerPreview.querySelectorAll(".reader-paragraph");

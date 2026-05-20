@@ -3,6 +3,7 @@
  */
 
 import { escapeHtml, renderTextWithActiveWord } from "./utils.js";
+import { setDearFlipVisible, setPdfTextMode } from "./pdf-view-shell.js";
 
 let renderedWindow = null;
 let lastLineTap = { at: 0, chunk: -1 };
@@ -21,15 +22,26 @@ export function ensurePdfListenContainer() {
   return el;
 }
 
-export function setPdfListenVisible(visible) {
+export function setPdfListenVisible(visible, { hasContent = true } = {}) {
   const el = ensurePdfListenContainer();
   if (!el) return;
-  el.hidden = !visible;
 
-  const book = document.getElementById("df-book");
+  if (visible) {
+    setPdfTextMode(true);
+    setDearFlipVisible(false);
+  }
+
+  const showText = visible && hasContent;
+  el.hidden = !showText;
+  if (!showText) {
+    el.classList.remove("empty");
+    el.innerHTML = "";
+  }
+
   const layer = document.getElementById("pdf-interaction-layer");
-  if (book) book.style.display = visible ? "none" : "";
-  if (layer) layer.hidden = visible ? true : layer.hidden;
+  const advanced = document.getElementById("pdf-advanced-reader");
+  if (layer) layer.hidden = showText ? true : layer.hidden;
+  if (advanced && visible) advanced.hidden = true;
 }
 
 export function updatePdfListenReader(runtime, callbacks = {}) {
@@ -37,14 +49,9 @@ export function updatePdfListenReader(runtime, callbacks = {}) {
   if (!container || container.hidden) return;
 
   if (!runtime.queue?.length) {
-    if (callbacks.isExtracting) {
-      container.classList.add("empty");
-      container.innerHTML = "";
-      renderedWindow = null;
-      return;
-    }
-    container.classList.add("empty");
-    container.innerHTML = `<p class="pdf-listen-placeholder">No readable text found in this PDF.</p>`;
+    container.hidden = true;
+    container.classList.remove("empty");
+    container.innerHTML = "";
     renderedWindow = null;
     return;
   }
@@ -55,8 +62,8 @@ export function updatePdfListenReader(runtime, callbacks = {}) {
       : 0;
   const chunk = runtime.queue[chunkIndex];
   if (!chunk) {
-    container.classList.add("empty");
-    container.innerHTML = `<p class="pdf-listen-placeholder">Press Play to start listening.</p>`;
+    container.hidden = true;
+    container.innerHTML = "";
     renderedWindow = null;
     return;
   }
@@ -106,17 +113,6 @@ export function updatePdfListenReader(runtime, callbacks = {}) {
       p.className = "reader-paragraph";
       p.dataset.chunkIndex = String(i);
       p.textContent = runtime.queue[i].text;
-
-      p.addEventListener("click", () => {
-        const idx = Number(p.dataset.chunkIndex);
-        const now = Date.now();
-        if (lastLineTap.chunk === idx && now - lastLineTap.at < 380) {
-          lastLineTap = { at: 0, chunk: -1 };
-          callbacks.onPlayFromChunk?.(idx);
-          return;
-        }
-        lastLineTap = { at: now, chunk: idx };
-      });
 
       p.addEventListener("dblclick", (event) => {
         event.preventDefault();

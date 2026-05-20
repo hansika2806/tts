@@ -7,7 +7,7 @@
   <meta name="description" content="Text-to-speech web app with Google Translate Hindi voice support.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500&family=Literata:opsz,wght@7..72,400;7..72,600&family=Lora:ital,wght@0,400;0,600;1,400&family=Merriweather:ital,wght@0,400;0,700;1,400&family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/webapp/styles.css">
   <link rel="stylesheet" href="/webapp/css/animations.css">
   <!-- DearFlip Flipbook -->
@@ -312,7 +312,16 @@
             <div class="now-reading-meta">
               <span id="reader-title" class="now-reading-title">Untitled session</span>
               <span id="reader-progress" class="now-reading-progress">0 / 0</span>
+              <div class="epub-reader-mode-toggle" id="epub-reader-mode-toggle" hidden>
+                <button type="button" id="player-mode-listen" class="mode-btn is-active">Listen</button>
+                <button type="button" id="player-mode-advanced" class="mode-btn mode-btn-advanced">Advanced</button>
+              </div>
             </div>
+            <nav class="epub-chapter-nav" id="epub-chapter-nav" hidden aria-label="Chapter navigation">
+              <button type="button" class="epub-chapter-nav-btn" id="epub-prev-chapter">← Previous chapter</button>
+              <span class="epub-chapter-nav-title" id="epub-chapter-nav-title">Chapter</span>
+              <button type="button" class="epub-chapter-nav-btn" id="epub-next-chapter">Next chapter →</button>
+            </nav>
             <div id="reader-preview" class="reader-preview empty">
               Open a book from Library and press Play to begin.
             </div>
@@ -419,7 +428,7 @@
               <div class="flipbook-mode-toggle">
                 <button id="flipbook-mode-read" class="mode-btn is-active" type="button" title="Reading Mode">Read</button>
                 <button id="flipbook-mode-listen" class="mode-btn" type="button" title="Listen Mode">Listen</button>
-                <button id="flipbook-mode-highlight" class="mode-btn" type="button" title="Highlights">Highlights</button>
+                <button id="flipbook-mode-advanced" class="mode-btn mode-btn-advanced" type="button" title="Advanced reading — cinematic novel view">Advanced</button>
               </div>
               <!-- TTS controls (shown in listen mode) -->
               <div id="flipbook-listen-controls" class="flipbook-listen-controls" style="display:none">
@@ -464,6 +473,17 @@
                 <p id="pdf-status-msg">Open a PDF to begin.</p>
               </div>
             </div>
+            <div class="pdf-status-extract" id="pdf-status-extract" hidden>
+              <div class="pdf-status-extract-top">
+                <strong>Preparing novel</strong>
+                <span class="pdf-status-extract-pct" id="pdf-status-extract-pct">0%</span>
+              </div>
+              <p class="pdf-status-extract-eta" id="pdf-status-extract-eta">Estimating…</p>
+              <div class="pdf-status-extract-track" aria-hidden="true">
+                <span class="pdf-status-extract-fill" id="pdf-status-extract-fill"></span>
+              </div>
+              <p class="pdf-status-extract-meta" id="pdf-status-extract-meta">Scanning pages…</p>
+            </div>
             <!-- Speed -->
             <div class="slider-item" style="margin-top:16px">
               <div class="slider-header">
@@ -474,10 +494,10 @@
             </div>
           </div>
 
-          <!-- Highlights panel -->
-          <div class="flipbook-panel-block">
-            <h3 class="flipbook-panel-title">Highlights</h3>
-            <p class="flipbook-panel-hint">Select any text in the flipbook to highlight it.</p>
+          <!-- Highlights panel (Advanced + Read) -->
+          <div class="flipbook-panel-block" id="flipbook-highlights-panel">
+            <h3 class="flipbook-panel-title">Saved highlights</h3>
+            <p class="flipbook-panel-hint">Advanced only: double-tap a passage to pick a colour and save.</p>
             <div id="flipbook-highlights-list" class="flipbook-highlights-list">
               <p class="flipbook-no-highlights">No highlights yet.</p>
             </div>
@@ -544,7 +564,7 @@
   <!-- Three.js & App -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="/js/aws-sdk.js"></script>
-  <script type="module" src="/webapp/js/main.js"></script>
+  <script type="module" src="/webapp/js/main.js?v=extract-finish"></script>
   <script>
     // Tab navigation
     document.addEventListener('DOMContentLoaded', () => {

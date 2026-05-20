@@ -35,6 +35,9 @@ export function persistState(state, immediate = false) {
     globalPronunciations: state.globalPronunciations || {},
     activeBookPronunciations: state.activeBookPronunciations || {},
     contentsPanelOpen: !!state.contentsPanelOpen,
+    epubReaderMode: state.epubReaderMode || "listen",
+    novelFontId: state.novelFontId || "literata",
+    novelSizeId: state.novelSizeId || "roomy",
   };
 
   const write = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(save));

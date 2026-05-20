@@ -2,8 +2,8 @@
  * DearFlip PDF reader for the web app.
  * Modes:
  *  - read: immersive manual page flipping
- *  - listen: large book view plus TTS transport/queue
- *  - highlight: saved selections and export tools
+ *  - listen: scrollable chapter text + TTS
+ *  - advanced: cinematic novel reader (extracted PDF text)
  */
 
 import {
@@ -12,7 +12,24 @@ import {
   setPdfListenVisible,
   updatePdfListenReader,
 } from "./pdf-listen-view.js";
+import {
+  ensurePdfAdvancedContainer,
+  resetPdfAdvancedView,
+  setPdfAdvancedVisible,
+  updatePdfAdvancedReader,
+} from "./pdf-advanced-view.js";
 import { ensureLoadProgressCard, hideLoadProgress, updateLoadProgress } from "./book-load-progress.js";
+import { resetExtractionEta } from "./extraction-eta.js";
+import { setActiveBookType } from "./session-context.js";
+import {
+  hidePdfPreparingView,
+  isPdfPreparingViewVisible,
+  setDearFlipVisible,
+  setPdfTextMode,
+  showPdfPreparingView,
+} from "./pdf-view-shell.js";
+
+let extractProgress = { page: 0, totalPages: 0, chaptersReady: 0, sectionsReady: 0 };
 
 let flipbookInstance = null;
 let currentPdfUrl = "";
@@ -28,8 +45,13 @@ let pageTextLayers = [];
 let ttsCallbacks = {};
 let onListenLayoutChange = null;
 let extracting = false;
+let pdfExtractionActive = false;
 let highlightHandlerAttached = false;
 let lastLineTap = { at: 0, chunk: -1 };
+let pendingRestoreMode = null;
+let pendingRestoreChunk = 0;
+/** Listen vs advanced overlay to update while user stays in Read during extraction */
+let extractionDisplayMode = "listen";
 
 const HIGHLIGHTS_KEY = "ra_pdf_highlights";
 const HIGHLIGHT_COLORS = ["#facc15", "#34d399", "#60a5fa", "#f472b6", "#a78bfa"];
@@ -49,6 +71,7 @@ export function initFlipbook(callbacks) {
         : new File([blob], `${book?.title || "book"}.pdf`, { type: "application/pdf" });
       await openPdfFile(file, {
         restoreChunk: book?.progress?.chunkIndex ?? 0,
+        restoreMode: book?.progress?.pdfReaderMode || "read",
         activateTab: options.activateTab !== false,
       });
     },
@@ -58,6 +81,8 @@ export function initFlipbook(callbacks) {
 export async function openPdfFile(file, options = {}) {
   if (options.activateTab !== false) activatePdfTab();
   clearCurrentBook();
+  pendingRestoreMode = options.restoreMode || "read";
+  pendingRestoreChunk = options.restoreChunk ?? 0;
   currentPdfName = file.name.replace(/\.pdf$/i, "") || "Untitled PDF";
   currentPage = 1;
   setStatus("Loading", `Preparing ${currentPdfName}...`);
@@ -66,16 +91,22 @@ export async function openPdfFile(file, options = {}) {
   const title = document.getElementById("flipbook-title");
   if (title) title.textContent = currentPdfName;
 
+  // Load DearFlip first, then extract text. Running both pdf.js pipelines at
+  // once (arrayBuffer parse + DearFlip worker) deadlocks getTextContent on many PDFs.
   try {
     currentPdfUrl = await uploadPdfForSameOriginUrl(file);
     await createFlipbook(currentPdfUrl);
     ttsCallbacks.onPdfLoaded?.(file, currentPdfUrl);
     setStatus("Ready", "Manual page flipping is ready.");
-    extractPdfText(file, options.restoreChunk ?? 0);
+    applyMode(pendingRestoreMode || "read");
   } catch (error) {
-    console.error(error);
-    setStatus("Error", error.message || "Could not open this PDF.");
+    console.warn("[pdf-flipbook] Flipbook (Read mode) unavailable:", error.message);
+    applyMode(pendingRestoreMode === "advanced" ? "advanced" : "listen");
+    setStatus("Listen", "Read mode unavailable — Listen mode extracting text.");
   }
+
+  pdfExtractionActive = true;
+  void extractPdfText(file, options.restoreChunk ?? 0);
 }
 
 export function setPdfDisplayQueue(queue) {
@@ -86,26 +117,112 @@ export function setPdfDisplayQueue(queue) {
 export function refreshPdfListenView(runtime) {
   if (readerMode !== "listen") return;
   window.__pdfListenRuntime = runtime;
-  const el = ensurePdfListenContainer();
-  if (extracting && !runtime?.queue?.length) {
-    if (el) el.hidden = true;
-    return;
+  const hasContent = hasListenablePdfText();
+  const busy = isPdfExtractionBusy();
+  if (hasContent && !busy) {
+    hidePdfPreparingView();
+    hideLoadProgress();
+  } else if (busy) {
+    showModePreparing("listen");
+  } else if (!hasContent) {
+    showModePreparing("listen", { empty: true });
   }
-  if (el) el.hidden = false;
+  const queueReady = !!(runtime?.queue?.length);
+  setPdfListenVisible(true, { hasContent: hasContent && !busy && queueReady });
+  if (!hasContent && busy) return;
+  if (!hasContent || !queueReady) return;
   updatePdfListenReader(runtime, {
     onPlayFromChunk: (chunkIndex) => playFromChunk(chunkIndex),
     isExtracting: extracting,
   });
 }
 
-function showPdfListenPlaceholder(isExtracting) {
-  const el = ensurePdfListenContainer();
-  if (!el) return;
-  el.hidden = false;
-  el.classList.add("empty");
-  el.innerHTML = isExtracting
-    ? `<p class="pdf-listen-placeholder"><span class="pdf-listen-spinner"></span> Extracting text from PDF…</p>`
-    : `<p class="pdf-listen-placeholder">Open Listen after the book text is ready, or try Read mode for page flipping.</p>`;
+export function refreshPdfAdvancedView(runtime) {
+  if (readerMode !== "advanced") return;
+  window.__pdfListenRuntime = runtime;
+  const hasContent = hasListenablePdfText();
+  const busy = isPdfExtractionBusy();
+  if (hasContent && !busy) {
+    hidePdfPreparingView();
+    hideLoadProgress();
+  } else if (busy) {
+    showModePreparing("advanced");
+  } else if (!hasContent) {
+    showModePreparing("advanced", { empty: true });
+  }
+  const queueReady = !!(runtime?.queue?.length);
+  setPdfAdvancedVisible(true, { hasContent: hasContent && !busy && queueReady });
+  if (!hasContent && busy) return;
+  if (!hasContent || !queueReady) return;
+  updatePdfAdvancedReader(runtime, {
+    onHighlightVerse: (text, chunkIndex, el) => showVerseHighlightPopup(text, chunkIndex, el),
+    getSavedHighlight: (chunkIndex) => getSavedHighlightForChunk(chunkIndex),
+    isExtracting: extracting,
+  });
+}
+
+export function showVerseHighlightPopup(text, chunkIndex, anchorEl) {
+  const rect = anchorEl?.getBoundingClientRect?.();
+  if (!rect) return;
+  showHighlightPopup(text, rect, chunkIndex);
+}
+
+function getSavedHighlightForChunk(chunkIndex) {
+  return highlights.find(
+    (h) => h.book === currentPdfName && h.chunkIndex === chunkIndex
+  );
+}
+
+export function getPdfReaderMode() {
+  return readerMode;
+}
+
+export function getPdfCurrentPage() {
+  return currentPage;
+}
+
+export function isPdfExtractionBusy() {
+  return extracting || pdfExtractionActive;
+}
+
+function hasListenablePdfText() {
+  return !!(
+    window.__pdfListenRuntime?.queue?.length ||
+    pdfChunks.length ||
+    displayQueue.length
+  );
+}
+
+function getPreparingMode() {
+  if (readerMode === "advanced") return "advanced";
+  if (readerMode === "listen") return "listen";
+  if (pendingRestoreMode === "advanced") return "advanced";
+  return extractionDisplayMode || "listen";
+}
+
+function updateExtractionPreparingUi() {
+  if (
+    readerMode !== "listen" &&
+    readerMode !== "advanced" &&
+    !isPdfPreparingViewVisible()
+  ) {
+    return;
+  }
+  showModePreparing(getPreparingMode());
+}
+
+function showModePreparing(mode, { empty = false } = {}) {
+  const busy = isPdfExtractionBusy();
+  const reallyEmpty = empty && !busy && !hasListenablePdfText();
+  showPdfPreparingView({
+    mode,
+    page: extractProgress.page,
+    totalPages: extractProgress.totalPages,
+    chaptersReady: extractProgress.chaptersReady,
+    sectionsReady: extractProgress.sectionsReady,
+    extracting: busy || (!reallyEmpty && extracting),
+    empty: reallyEmpty,
+  });
 }
 
 function activatePdfTab() {
@@ -121,6 +238,7 @@ function activatePdfTab() {
     button.setAttribute("aria-selected", active ? "true" : "false");
   });
   document.body.classList.add("is-pdf-tab");
+  setActiveBookType("pdf");
 }
 
 function bindControls() {
@@ -139,7 +257,7 @@ function bindControls() {
 
   document.getElementById("flipbook-mode-read")?.addEventListener("click", () => applyMode("read"));
   document.getElementById("flipbook-mode-listen")?.addEventListener("click", () => applyMode("listen"));
-  document.getElementById("flipbook-mode-highlight")?.addEventListener("click", () => applyMode("highlight"));
+  document.getElementById("flipbook-mode-advanced")?.addEventListener("click", () => applyMode("advanced"));
 
   document.getElementById("flipbook-auto-flip")?.addEventListener("change", (event) => {
     autoFlip = event.target.checked;
@@ -148,8 +266,9 @@ function bindControls() {
   document.getElementById("flipbook-export-highlights")?.addEventListener("click", exportHighlights);
 
   document.getElementById("pdf-read-aloud-btn")?.addEventListener("click", () => {
-    applyMode("listen");
-    if (!pdfChunks.length && !window.__pdfListenRuntime?.queue?.length) {
+    const wasRead = readerMode === "read";
+    if (wasRead) applyMode("listen");
+    if (!hasListenablePdfText()) {
       setStatus(extracting ? "Extracting" : "Not ready", extracting ? "Text extraction is still running." : "No readable text was found.");
       return;
     }
@@ -185,10 +304,13 @@ function clearCurrentBook() {
   document.getElementById("pdf-read-aloud-btn")?.classList.remove("is-playing");
   pdfChunks = [];
   displayQueue = [];
+  extractionDisplayMode = "listen";
   extracting = false;
+  pdfExtractionActive = false;
   renderPdfQueue();
   pageTextLayers = [];
   resetPdfListenView();
+  resetPdfAdvancedView();
   renderInteractionLayer();
 
   if (flipbookInstance) {
@@ -238,7 +360,7 @@ async function createFlipbook(sourceUrl) {
     height: getFlipbookHeight(),
     duration: 700,
     webgl: true,
-    sound: true,
+    sound: false,
     pageMode: 2,
     singlePageMode: 0,
     backgroundColor: "transparent",
@@ -271,34 +393,76 @@ function resizeFlipbook() {
   }
 }
 
+function yieldToBrowser() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function getPageTextContent(page, pageNumber) {
+  const timeoutMs = 60000;
+  return Promise.race([
+    page.getTextContent({ disableCombineTextItems: false }),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`Page ${pageNumber} text timed out`)), timeoutMs);
+    }),
+  ]);
+}
+
 async function extractPdfText(file, restoreChunk = 0) {
   extracting = true;
+  pdfExtractionActive = true;
+  resetExtractionEta();
+  pendingRestoreChunk = restoreChunk;
+  extractionDisplayMode =
+    pendingRestoreMode === "advanced" ? "advanced" : "listen";
   pdfChunks = [];
+  pageTextLayers = [];
   renderPdfQueue();
   setStatus("Extracting", "Reading text for listening mode...");
   ensureLoadProgressCard();
+  extractProgress = { page: 0, totalPages: 0, chaptersReady: 0, sectionsReady: 0 };
+  updateLoadProgress({ page: 0, totalPages: 0, chaptersReady: 0, sectionsReady: 0 });
+  updateExtractionPreparingUi();
 
   try {
+    setStatus("Extracting", "Loading PDF engine…");
     const pdfjsLib = await getPdfJs();
+    setStatus("Extracting", "Opening document…");
     const buffer = await file.arrayBuffer();
-    const pdfDoc = await pdfjsLib.getDocument({ data: buffer }).promise;
+    const pdfDoc = await pdfjsLib.getDocument({ data: buffer, useSystemFonts: true }).promise;
     totalPages = pdfDoc.numPages || totalPages;
+    extractProgress.totalPages = pdfDoc.numPages;
+    updateLoadProgress({
+      page: 0,
+      totalPages: pdfDoc.numPages,
+      chaptersReady: 0,
+      sectionsReady: 0,
+    });
+    updateExtractionPreparingUi();
     let chunkId = 0;
     const pageTexts = [];
-
-    updateLoadProgress({ page: 0, totalPages: pdfDoc.numPages, chaptersReady: 0, sectionsReady: 0 });
+    const needReadLayers =
+      readerMode === "read" ||
+      pendingRestoreMode === "read";
 
     for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber += 1) {
       const page = await pdfDoc.getPage(pageNumber);
-      const viewport = page.getViewport({ scale: 1 });
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item) => item.str)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
+      let pageText = "";
+      try {
+        const textContent = await getPageTextContent(page, pageNumber);
+        pageText = textContent.items
+          .map((item) => item.str)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (needReadLayers) {
+          const viewport = page.getViewport({ scale: 1 });
+          pageTextLayers[pageNumber - 1] = buildPageTextLayer(textContent.items, viewport);
+        }
+      } catch (error) {
+        console.warn("[pdf-flipbook] Page text skipped:", pageNumber, error.message);
+        pageTextLayers[pageNumber - 1] = pageTextLayers[pageNumber - 1] || null;
+      }
 
-      pageTextLayers[pageNumber - 1] = buildPageTextLayer(textContent.items, viewport);
       pageTexts[pageNumber - 1] = pageText;
 
       splitPageText(pageText).forEach((text) => {
@@ -306,47 +470,104 @@ async function extractPdfText(file, restoreChunk = 0) {
         chunkId += 1;
       });
 
-      const fullText = pageTexts.filter(Boolean).join("\n\n");
-      ttsCallbacks.onExtractionProgress?.({
-        pageNumber,
+      extractProgress = {
+        page: pageNumber,
         totalPages: pdfDoc.numPages,
-        pdfChunks: pdfChunks.slice(),
-        fullText,
-        pageTexts: pageTexts.slice(),
-        restoreChunk,
+        chaptersReady: window.__pdfListenRuntime?.chapters?.length || 0,
+        sectionsReady: pdfChunks.length,
+      };
+      updateLoadProgress({
+        page: pageNumber,
+        totalPages: pdfDoc.numPages,
+        chaptersReady: extractProgress.chaptersReady,
+        sectionsReady: extractProgress.sectionsReady,
         done: false,
       });
+      updateExtractionPreparingUi();
+      if (readerMode === "listen" && pageNumber % 16 === 0) {
+        renderPdfQueue();
+      }
 
-      if (pageNumber % 2 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
-      setStatus("Extracting", `Prepared page ${pageNumber} of ${pdfDoc.numPages}.`);
+      if (pageNumber % 8 === 0) {
+        setStatus("Extracting", `Prepared page ${pageNumber} of ${pdfDoc.numPages}.`);
+      }
+
+      await yieldToBrowser();
     }
 
-    const fullText = pageTexts.filter(Boolean).join("\n\n");
-    renderPdfQueue();
-    renderInteractionLayer();
-    ttsCallbacks.onExtractionProgress?.({
-      pageNumber: pdfDoc.numPages,
-      totalPages: pdfDoc.numPages,
-      pdfChunks: pdfChunks.slice(),
-      fullText,
-      pageTexts: pageTexts.slice(),
+    finalizePdfExtraction({
+      pageTexts,
       restoreChunk,
-      done: true,
+      error: null,
     });
-    ttsCallbacks.onTextExtracted?.(pdfChunks, { restoreChunk, fullText, pageTexts });
-    hideLoadProgress();
-    updateChunkIndicator();
-    setStatus("Ready", pdfChunks.length ? `${pdfChunks.length} listening sections ready.` : "No selectable text was found in this PDF.");
-    if (readerMode === "listen" && window.__pdfListenRuntime) {
-      refreshPdfListenView(window.__pdfListenRuntime);
-    }
   } catch (error) {
-    console.error(error);
-    hideLoadProgress();
-    setStatus("Ready", "Book view is ready, but text extraction failed.");
-  } finally {
-    extracting = false;
+    console.error("[pdf-flipbook] extraction error:", error);
+    finalizePdfExtraction({
+      pageTexts: [],
+      restoreChunk: pendingRestoreChunk,
+      error,
+    });
   }
+}
+
+function finalizePdfExtraction({ pageTexts = [], restoreChunk = 0, error = null }) {
+  const hadPendingMode = pendingRestoreMode;
+  const savedRestoreChunk = restoreChunk ?? pendingRestoreChunk ?? 0;
+
+  extracting = false;
+  pdfExtractionActive = false;
+  hideLoadProgress();
+  hidePdfPreparingView();
+
+  const hasText = pdfChunks.length > 0;
+  if (hasText) {
+    try {
+      ttsCallbacks.onTextExtracted?.(pdfChunks, {
+        restoreChunk: savedRestoreChunk,
+        pageTexts,
+        fromPdfExtraction: true,
+      });
+    } catch (callbackError) {
+      console.error("[pdf-flipbook] queue build failed:", callbackError);
+    }
+  }
+
+  let restoreMode = hadPendingMode || readerMode || "read";
+  if ((restoreMode === "listen" || restoreMode === "advanced") && !hasText) {
+    restoreMode = "read";
+  }
+
+  pendingRestoreMode = null;
+  pendingRestoreChunk = 0;
+
+  renderPdfQueue();
+  renderInteractionLayer();
+  updateChunkIndicator();
+
+  applyMode(restoreMode, { skipPersist: true });
+  if (hasText) {
+    navigateToResumeChunk(savedRestoreChunk);
+    const sectionCount =
+      window.__pdfListenRuntime?.queue?.length || pdfChunks.length;
+    setStatus(
+      "Ready",
+      error
+        ? `${sectionCount} sections ready (some pages may have been skipped).`
+        : `${sectionCount} listening sections ready.`
+    );
+  } else {
+    setStatus(
+      "Ready",
+      error
+        ? "Book view is ready, but text extraction failed."
+        : "No selectable text was found in this PDF."
+    );
+  }
+
+  ttsCallbacks.onReaderModeChange?.(restoreMode, {
+    chunkIndex: savedRestoreChunk,
+    pageIndex: currentPage - 1,
+  });
 }
 
 function buildPageTextLayer(items, viewport) {
@@ -428,22 +649,27 @@ function loadScript(src) {
   });
 }
 
-function applyMode(mode) {
+function applyMode(mode, options = {}) {
   if (!document.body.classList.contains("is-pdf-tab")) return;
+  const valid = mode === "listen" || mode === "advanced" || mode === "read";
+  if (!valid) mode = "read";
+
   readerMode = mode;
   const isListen = mode === "listen";
-  const isHighlight = mode === "highlight";
+  const isAdvanced = mode === "advanced";
+  if (isListen) extractionDisplayMode = "listen";
+  if (isAdvanced) extractionDisplayMode = "advanced";
 
   document.body.classList.toggle("pdf-mode-read", mode === "read");
   document.body.classList.toggle("pdf-mode-listen", isListen);
-  document.body.classList.toggle("pdf-mode-highlight", isHighlight);
+  document.body.classList.toggle("pdf-mode-advanced", isAdvanced);
 
   document.getElementById("flipbook-mode-read")?.classList.toggle("is-active", mode === "read");
   document.getElementById("flipbook-mode-listen")?.classList.toggle("is-active", isListen);
-  document.getElementById("flipbook-mode-highlight")?.classList.toggle("is-active", isHighlight);
+  document.getElementById("flipbook-mode-advanced")?.classList.toggle("is-active", isAdvanced);
 
   const listenControls = document.getElementById("flipbook-listen-controls");
-  if (listenControls) listenControls.style.display = isListen ? "flex" : "none";
+  if (listenControls) listenControls.style.display = "flex";
 
   const queueBlock = document.getElementById("flipbook-queue-block");
   if (queueBlock) queueBlock.style.display = isListen ? "block" : "none";
@@ -451,68 +677,141 @@ function applyMode(mode) {
   const tocBlock = document.getElementById("flipbook-toc-block");
   if (tocBlock) tocBlock.style.display = isListen ? "block" : "none";
 
+  const highlightsPanel = document.getElementById("flipbook-highlights-panel");
+  if (highlightsPanel) highlightsPanel.style.display = isAdvanced ? "block" : "none";
+
   document.querySelectorAll(".flipbook-panel-col .flipbook-panel-block").forEach((block) => {
     if (
       block.id === "flipbook-toc-block" ||
       block.id === "flipbook-status-block" ||
-      block.id === "flipbook-queue-block"
+      block.id === "flipbook-queue-block" ||
+      block.id === "flipbook-highlights-panel"
     ) {
       return;
     }
-    block.style.display = isListen ? "none" : "";
+    block.style.display = isListen || isAdvanced ? "none" : "";
   });
 
   const panel = document.querySelector(".flipbook-panel-col");
   if (panel) panel.hidden = mode === "read";
 
-  setPdfListenVisible(isListen);
+    const hasText = hasListenablePdfText();
+    const busy = isPdfExtractionBusy();
+
   ensurePdfListenContainer();
+  ensurePdfAdvancedContainer();
 
   const autoFlipLabel = document.querySelector(".flipbook-auto-flip-label");
-  if (autoFlipLabel) autoFlipLabel.style.display = isListen ? "none" : "";
+  if (autoFlipLabel) autoFlipLabel.style.display = mode === "read" ? "" : "none";
 
   if (mode === "read") {
+    setPdfTextMode(false);
+    setDearFlipVisible(true);
+    hidePdfPreparingView();
+    hideLoadProgress();
+    setPdfListenVisible(false);
+    setPdfAdvancedVisible(false);
+    const advancedEl = document.getElementById("pdf-advanced-reader");
+    if (advancedEl) advancedEl.hidden = true;
     ttsCallbacks.onStopTts?.();
     document.getElementById("pdf-read-aloud-btn")?.classList.remove("is-playing");
-    setStatus("Reading", "Manual page flipping mode.");
+    navigateToResumeChunk(getResumeChunkIndex());
+    setStatus("Reading", "Flip pages manually. Auto-flip follows playback when enabled.");
   } else if (isListen) {
     window.__pdfReaderMode = "listen";
-    const q = window.__pdfListenRuntime?.queue;
-    setStatus(
-      "Listen",
-      q?.length
-        ? "Scroll the chapter. Double-tap a paragraph to start there."
-        : extracting
-          ? "Extracting text from PDF…"
-          : "Preparing text for listening..."
-    );
-    if (window.__pdfListenRuntime?.queue?.length) {
+    setPdfAdvancedVisible(false);
+    if (hasText && !busy && window.__pdfListenRuntime?.queue?.length) {
+      hidePdfPreparingView();
+      hideLoadProgress();
+      setPdfListenVisible(true, { hasContent: true });
       refreshPdfListenView(window.__pdfListenRuntime);
-    } else if (extracting) {
-      ensureLoadProgressCard();
+      setStatus("Listen", "Double-tap any paragraph to start listening from there.");
+    } else if (hasText && !busy) {
+      setPdfListenVisible(true, { hasContent: false });
+      showModePreparing("listen");
+      setStatus("Listen", "Finishing audiobook layout…");
+    } else if (busy || extracting) {
+      setPdfListenVisible(true, { hasContent: false });
+      updateExtractionPreparingUi();
+      setStatus("Listen", "Preparing your audiobook view…");
     } else {
-      showPdfListenPlaceholder(false);
+      setPdfListenVisible(true, { hasContent: false });
+      showModePreparing("listen", { empty: true });
+      setStatus("Listen", "No readable text — switch to Read for page view.");
     }
     onListenLayoutChange?.();
-  } else {
-    window.__pdfReaderMode = mode;
+  } else if (isAdvanced) {
+    window.__pdfReaderMode = "advanced";
+    setPdfListenVisible(false);
+    if (hasText && !busy && window.__pdfListenRuntime?.queue?.length) {
+      hidePdfPreparingView();
+      hideLoadProgress();
+      setPdfAdvancedVisible(true, { hasContent: true });
+      refreshPdfAdvancedView(window.__pdfListenRuntime);
+      setStatus("Advanced", "Double-tap a passage to highlight · colours save privately.");
+    } else if (hasText && !busy) {
+      setPdfAdvancedVisible(true, { hasContent: false });
+      showModePreparing("advanced");
+      setStatus("Advanced", "Finishing novel layout…");
+    } else if (busy || extracting) {
+      setPdfAdvancedVisible(true, { hasContent: false });
+      updateExtractionPreparingUi();
+      setStatus("Advanced", "Crafting novel view from PDF…");
+    } else {
+      setPdfAdvancedVisible(true, { hasContent: false });
+      showModePreparing("advanced", { empty: true });
+      setStatus("Advanced", "No readable text — use Read mode for pages.");
+    }
     onListenLayoutChange?.();
-    setStatus("Highlights", "Select text in the book, then save it.");
+  }
+
+  if (!options.skipPersist) {
+    ttsCallbacks.onReaderModeChange?.(mode, {
+      chunkIndex: getResumeChunkIndex(),
+      pageIndex: currentPage - 1,
+    });
   }
 
   setTimeout(() => {
     resizeFlipbook();
-    renderInteractionLayer();
+    if (mode === "read") renderInteractionLayer();
   }, 80);
 }
 
+function getResumeChunkIndex() {
+  const runtime = window.__pdfListenRuntime;
+  if (runtime?.currentIndex >= 0 && runtime.currentIndex < (runtime.queue?.length || 0)) {
+    return runtime.currentIndex;
+  }
+  const chunk = pdfChunks[pendingRestoreChunk];
+  return chunk ? pendingRestoreChunk : 0;
+}
+
+function navigateToResumeChunk(chunkIndex) {
+  const runtime = window.__pdfListenRuntime;
+  const chunk =
+    runtime?.queue?.[chunkIndex] ??
+    pdfChunks[chunkIndex] ??
+    pdfChunks.find((c) => c.id === chunkIndex);
+  if (!chunk || !flipbookInstance) return;
+  const targetPage = (chunk.pageIndex ?? 0) + 1;
+  if (targetPage !== currentPage) {
+    goToFlipbookPage(targetPage);
+  }
+}
+
 function resetPdfModeClasses() {
-  document.body.classList.remove("pdf-mode-read", "pdf-mode-listen", "pdf-mode-highlight");
+  document.body.classList.remove("pdf-mode-read", "pdf-mode-listen", "pdf-mode-advanced");
 }
 
 function renderPdfQueue() {
   const list = document.getElementById("pdf-chunk-list");
-  const items = displayQueue.length ? displayQueue : pdfChunks;
+  const runtimeQ = window.__pdfListenRuntime?.queue;
+  const items = displayQueue.length
+    ? displayQueue
+    : runtimeQ?.length
+      ? runtimeQ
+      : pdfChunks;
   if (!list) return;
   if (!items.length) {
     list.innerHTML = `<div class="queue-empty">${extracting ? "Preparing listening sections..." : "No listening sections yet."}</div>`;
@@ -565,6 +864,10 @@ export function onChapterAudioDone(chapterIndex, runtime) {
     refreshPdfListenView(runtime);
     return;
   }
+  if (readerMode === "advanced") {
+    refreshPdfAdvancedView(runtime);
+    return;
+  }
   if (!autoFlip || !flipbookInstance) return;
   const chunk = runtime?.queue?.find((c) => (c.chapterIndex ?? 0) === chapterIndex);
   if (chunk?.pageIndex != null) {
@@ -573,7 +876,7 @@ export function onChapterAudioDone(chapterIndex, runtime) {
 }
 
 export function syncFlipbookToChunk(chunkIndex, runtime) {
-  if (!pdfChunks.length && !runtime?.queue?.length) return;
+  if (!hasListenablePdfText()) return;
 
   const chunk = runtime?.queue?.[chunkIndex] ?? pdfChunks[chunkIndex];
   if (!chunk) return;
@@ -585,6 +888,14 @@ export function syncFlipbookToChunk(chunkIndex, runtime) {
     if (runtime) {
       window.__pdfListenRuntime = runtime;
       refreshPdfListenView(runtime);
+    }
+    return;
+  }
+
+  if (readerMode === "advanced") {
+    if (runtime) {
+      window.__pdfListenRuntime = runtime;
+      refreshPdfAdvancedView(runtime);
     }
     return;
   }
@@ -612,6 +923,11 @@ function goToFlipbookPage(pageNumber) {
 }
 
 function renderInteractionLayer() {
+  if (readerMode !== "read") {
+    const layer = document.getElementById("pdf-interaction-layer");
+    if (layer) layer.hidden = true;
+    return;
+  }
   const layer = document.getElementById("pdf-interaction-layer");
   const container = document.getElementById("flipbook-container");
   const page = pageTextLayers[currentPage - 1];
@@ -682,8 +998,9 @@ function findChunkForPage(pageIndex) {
 }
 
 function playFromChunk(chunkIndex) {
-  if (!pdfChunks.length) return;
-  applyMode("listen");
+  if (!hasListenablePdfText()) return;
+  if (readerMode === "read") applyMode("listen");
+  else if (readerMode === "advanced") applyMode("listen");
   ttsCallbacks.onPlayRequested?.(chunkIndex);
   document.getElementById("pdf-read-aloud-btn")?.classList.add("is-playing");
   setStatus("Playing", `Reading from page ${pdfChunks[chunkIndex]?.pageIndex + 1 || currentPage}.`);
@@ -737,7 +1054,12 @@ function attachHighlightHandler() {
 
 function onDocumentMouseUp() {
   if (!document.body.classList.contains("is-pdf-tab")) return;
+  if (readerMode !== "advanced") return;
+  const advancedRoot = document.getElementById("pdf-advanced-reader");
   const selection = window.getSelection?.();
+  if (advancedRoot && selection?.anchorNode && !advancedRoot.contains(selection.anchorNode)) {
+    return;
+  }
   if (!selection || selection.isCollapsed) return;
   const text = selection.toString().trim().replace(/\s+/g, " ");
   if (text.length < 4) return;
@@ -748,7 +1070,7 @@ function onDocumentMouseUp() {
   showHighlightPopup(text, rect);
 }
 
-function showHighlightPopup(text, rect) {
+function showHighlightPopup(text, rect, chunkIndex = -1) {
   document.getElementById("highlight-popup")?.remove();
   const popup = document.createElement("div");
   popup.id = "highlight-popup";
@@ -758,20 +1080,21 @@ function showHighlightPopup(text, rect) {
   popup.innerHTML = `
     <div class="highlight-popup-inner">
       ${HIGHLIGHT_COLORS.map((color) => `<button type="button" class="hl-swatch" data-color="${color}" style="background:${color}" title="Highlight"></button>`).join("")}
-      <button type="button" class="hl-fav-btn">Save</button>
-      <button type="button" class="hl-close" title="Dismiss">x</button>
+      <p class="highlight-popup-label">Choose highlight colour</p>
+      <button type="button" class="hl-fav-btn">Save highlight</button>
+      <button type="button" class="hl-close" title="Dismiss">×</button>
     </div>
   `;
   document.body.appendChild(popup);
 
   popup.querySelector(".hl-close")?.addEventListener("click", clearSelectionAndPopup);
   popup.querySelector(".hl-fav-btn")?.addEventListener("click", () => {
-    saveHighlight(text, "#facc15", true);
+    saveHighlight(text, "#facc15", true, chunkIndex);
     clearSelectionAndPopup();
   });
   popup.querySelectorAll(".hl-swatch").forEach((swatch) => {
     swatch.addEventListener("click", () => {
-      saveHighlight(text, swatch.dataset.color || "#facc15", false);
+      saveHighlight(text, swatch.dataset.color || "#facc15", false, chunkIndex);
       clearSelectionAndPopup();
     });
   });
@@ -782,11 +1105,17 @@ function clearSelectionAndPopup() {
   window.getSelection?.()?.removeAllRanges();
 }
 
-function saveHighlight(text, color, favourite) {
+function saveHighlight(text, color, favourite, chunkIndex = -1) {
+  const chunk =
+    chunkIndex >= 0 ? window.__pdfListenRuntime?.queue?.[chunkIndex] : null;
+  highlights = highlights.filter(
+    (h) => !(h.book === currentPdfName && h.chunkIndex === chunkIndex && chunkIndex >= 0)
+  );
   highlights.unshift({
     id: Date.now(),
     text: text.slice(0, 700),
-    page: currentPage,
+    page: chunk ? (chunk.pageIndex ?? 0) + 1 : currentPage,
+    chunkIndex: chunkIndex >= 0 ? chunkIndex : undefined,
     color,
     favourite,
     ts: new Date().toISOString(),
@@ -794,8 +1123,10 @@ function saveHighlight(text, color, favourite) {
   });
   persistHighlights();
   renderHighlightsList();
-  renderInteractionLayer();
-  applyMode("highlight");
+  if (readerMode === "read") renderInteractionLayer();
+  if (readerMode === "advanced" && window.__pdfListenRuntime) {
+    refreshPdfAdvancedView(window.__pdfListenRuntime);
+  }
 }
 
 function isTextHighlighted(page, text) {

@@ -1,5 +1,13 @@
 import { locateWordBoundary } from "./utils.js";
 
+/** Compensate for browser attenuation when playbackRate ≠ 1. */
+export function effectivePlaybackVolume(volume, playbackRate = 1) {
+  const v = Math.max(0, Math.min(1, Number(volume) || 1));
+  const rate = Math.max(0.25, Number(playbackRate) || 1);
+  if (rate === 1) return v;
+  return Math.min(1, v * (rate < 1 ? 1.05 : 1.12));
+}
+
 export async function loadNativeVoices() {
   const loadNow = () => speechSynthesis.getVoices().filter(Boolean);
   let voices = loadNow();
@@ -29,7 +37,7 @@ export function speakWithNativeVoice(chunk, voiceEntry, playback, controls) {
     utterance.lang = voiceEntry.lang || voiceEntry.voice.lang;
     utterance.rate = controls.rate;
     utterance.pitch = controls.pitch;
-    utterance.volume = controls.volume;
+    utterance.volume = effectivePlaybackVolume(controls.volume, controls.rate);
     utterance.onstart = () => controls.onStart?.();
     utterance.onboundary = (event) => {
       if (typeof event.charIndex !== "number") return;
@@ -55,10 +63,11 @@ export function playBlobAudio(blob, playback, controls, playbackRate) {
     playback.currentObjectUrl = URL.createObjectURL(blob);
     const audio = new Audio(playback.currentObjectUrl);
     playback.currentAudio = audio;
-    audio.volume = controls.volume;
-    if ('preservesPitch' in audio) audio.preservesPitch = true;
-    audio.defaultPlaybackRate = playbackRate || 1;
-    audio.playbackRate = playbackRate || 1;
+    const rate = playbackRate || 1;
+    if ("preservesPitch" in audio) audio.preservesPitch = true;
+    audio.defaultPlaybackRate = rate;
+    audio.playbackRate = rate;
+    audio.volume = effectivePlaybackVolume(controls.volume, rate);
     audio.onplay = () => controls.onStart?.();
     audio.onended = () => {
       releaseAudioResources(playback);
