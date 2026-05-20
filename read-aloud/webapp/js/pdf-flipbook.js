@@ -8,6 +8,7 @@
 
 import {
   ensurePdfListenContainer,
+  playPdfChapterTransition,
   resetPdfListenView,
   setPdfListenVisible,
   updatePdfListenReader,
@@ -91,22 +92,26 @@ export async function openPdfFile(file, options = {}) {
   const title = document.getElementById("flipbook-title");
   if (title) title.textContent = currentPdfName;
 
-  // Load DearFlip first, then extract text. Running both pdf.js pipelines at
-  // once (arrayBuffer parse + DearFlip worker) deadlocks getTextContent on many PDFs.
+  // Start text extraction immediately — reads File directly, no server needed.
+  pdfExtractionActive = true;
+  void extractPdfText(file, options.restoreChunk ?? 0);
+
+  // Then set up DearFlip in parallel for Read mode.
+  // If server/DearFlip fails, Listen+Advanced still work from the extraction above.
   try {
     currentPdfUrl = await uploadPdfForSameOriginUrl(file);
     await createFlipbook(currentPdfUrl);
     ttsCallbacks.onPdfLoaded?.(file, currentPdfUrl);
     setStatus("Ready", "Manual page flipping is ready.");
-    applyMode(pendingRestoreMode || "read");
+    // Only switch to read if extraction hasn't already finalized into listen/advanced
+    if (pendingRestoreMode) applyMode(pendingRestoreMode);
   } catch (error) {
     console.warn("[pdf-flipbook] Flipbook (Read mode) unavailable:", error.message);
-    applyMode(pendingRestoreMode === "advanced" ? "advanced" : "listen");
+    // Extraction is already running; switch to listen so user sees the progress ring
+    if (pendingRestoreMode !== "advanced") applyMode("listen");
+    else applyMode("advanced");
     setStatus("Listen", "Read mode unavailable — Listen mode extracting text.");
   }
-
-  pdfExtractionActive = true;
-  void extractPdfText(file, options.restoreChunk ?? 0);
 }
 
 export function setPdfDisplayQueue(queue) {
@@ -133,6 +138,7 @@ export function refreshPdfListenView(runtime) {
   if (!hasContent || !queueReady) return;
   updatePdfListenReader(runtime, {
     onPlayFromChunk: (chunkIndex) => playFromChunk(chunkIndex),
+    onChapterJump: (start) => ttsCallbacks.onChapterJump?.(start),
     isExtracting: extracting,
   });
 }
@@ -155,9 +161,12 @@ export function refreshPdfAdvancedView(runtime) {
   if (!hasContent && busy) return;
   if (!hasContent || !queueReady) return;
   updatePdfAdvancedReader(runtime, {
-    onHighlightVerse: (text, chunkIndex, el) => showVerseHighlightPopup(text, chunkIndex, el),
     getSavedHighlight: (chunkIndex) => getSavedHighlightForChunk(chunkIndex),
+    onSaveHighlight: (chunkIndex, color) => saveHighlight("", color, false, chunkIndex),
+    onRemoveHighlight: (chunkIndex) => removeHighlightForChunk(chunkIndex),
     isExtracting: extracting,
+    onChapterJump: (start) => ttsCallbacks.onChapterJump?.(start),
+    onAdjacentChapter: (delta) => ttsCallbacks.onAdjacentChapter?.(delta),
   });
 }
 
@@ -511,8 +520,12 @@ async function extractPdfText(file, restoreChunk = 0) {
 }
 
 function finalizePdfExtraction({ pageTexts = [], restoreChunk = 0, error = null }) {
-  const hadPendingMode = pendingRestoreMode;
   const savedRestoreChunk = restoreChunk ?? pendingRestoreChunk ?? 0;
+  // Use the mode the user is currently in, falling back to the requested restore mode.
+  // Do NOT blindly use pendingRestoreMode — the user may have switched to listen/advanced
+  // manually while extraction was running, and that choice must be respected.
+  const currentUserMode = readerMode;
+  const fallbackMode = pendingRestoreMode || "read";
 
   extracting = false;
   pdfExtractionActive = false;
@@ -532,7 +545,16 @@ function finalizePdfExtraction({ pageTexts = [], restoreChunk = 0, error = null 
     }
   }
 
-  let restoreMode = hadPendingMode || readerMode || "read";
+  // Decide final mode:
+  // 1. If user manually switched to listen/advanced while extracting → stay there
+  // 2. Otherwise use the restore mode (what the book was saved with)
+  // 3. If no text found and mode needs text → fall back to read
+  let restoreMode;
+  if (currentUserMode === "listen" || currentUserMode === "advanced") {
+    restoreMode = currentUserMode; // respect user's manual switch
+  } else {
+    restoreMode = fallbackMode;
+  }
   if ((restoreMode === "listen" || restoreMode === "advanced") && !hasText) {
     restoreMode = "read";
   }
@@ -861,7 +883,14 @@ export function onPageAudioDone(pageNumber) {
 
 export function onChapterAudioDone(chapterIndex, runtime) {
   if (readerMode === "listen") {
-    refreshPdfListenView(runtime);
+    const nextChunk = runtime?.queue?.find((c) => (c.chapterIndex ?? 0) === chapterIndex);
+    if (nextChunk) {
+      playPdfChapterTransition(nextChunk, { completedPrevious: true }).then(() => {
+        refreshPdfListenView(runtime);
+      });
+    } else {
+      refreshPdfListenView(runtime);
+    }
     return;
   }
   if (readerMode === "advanced") {
@@ -1113,7 +1142,7 @@ function saveHighlight(text, color, favourite, chunkIndex = -1) {
   );
   highlights.unshift({
     id: Date.now(),
-    text: text.slice(0, 700),
+    text: (text || chunk?.text || "").slice(0, 700),
     page: chunk ? (chunk.pageIndex ?? 0) + 1 : currentPage,
     chunkIndex: chunkIndex >= 0 ? chunkIndex : undefined,
     color,
@@ -1124,6 +1153,17 @@ function saveHighlight(text, color, favourite, chunkIndex = -1) {
   persistHighlights();
   renderHighlightsList();
   if (readerMode === "read") renderInteractionLayer();
+  if (readerMode === "advanced" && window.__pdfListenRuntime) {
+    refreshPdfAdvancedView(window.__pdfListenRuntime);
+  }
+}
+
+function removeHighlightForChunk(chunkIndex) {
+  highlights = highlights.filter(
+    (h) => !(h.book === currentPdfName && h.chunkIndex === chunkIndex)
+  );
+  persistHighlights();
+  renderHighlightsList();
   if (readerMode === "advanced" && window.__pdfListenRuntime) {
     refreshPdfAdvancedView(window.__pdfListenRuntime);
   }

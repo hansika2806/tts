@@ -1,14 +1,24 @@
 /**
- * Advanced mode — cinematic novel reader extracted from PDF text.
+ * PDF Advanced Mode — cinematic novel reader extracted from PDF text.
+ *
+ * Features:
+ *  - Beautiful chapter-level rendering (one chapter at a time)
+ *  - Double-tap paragraph → highlight color picker that saves persistently
+ *  - Active word highlight during TTS playback
+ *  - Smooth scroll to active line
+ *  - Typography toolbar (font, size)
  */
 
 import { escapeHtml, renderTextWithActiveWord } from "./utils.js";
 import { applyNovelTypography, ensureNovelTypographyToolbar } from "./novel-typography.js";
 import { setDearFlipVisible, setPdfTextMode } from "./pdf-view-shell.js";
 
-let renderedWindow = null;
-let lastLineTap = { at: 0, chunk: -1 };
-let userHighlightChunk = -1;
+let renderedChapter = -1;
+let lastDblTapChunk = -1;
+
+const HIGHLIGHT_COLORS = ["#facc15", "#34d399", "#60a5fa", "#f472b6", "#a78bfa", "#fb923c"];
+
+// ─── Container ──────────────────────────────────────────────────────────────
 
 export function ensurePdfAdvancedContainer() {
   let el = document.getElementById("pdf-advanced-reader");
@@ -37,6 +47,7 @@ export function setPdfAdvancedVisible(visible, { hasContent = true } = {}) {
   el.hidden = !showText;
   if (!showText) {
     el.innerHTML = "";
+    renderedChapter = -1;
     return;
   }
 
@@ -61,28 +72,110 @@ export function setPdfAdvancedVisible(visible, { hasContent = true } = {}) {
 }
 
 export function resetPdfAdvancedView() {
-  renderedWindow = null;
-  lastLineTap = { at: 0, chunk: -1 };
-  userHighlightChunk = -1;
+  renderedChapter = -1;
+  lastDblTapChunk = -1;
   const el = document.getElementById("pdf-advanced-reader");
   if (el) {
     el.innerHTML = "";
     el.hidden = true;
   }
+  closeHighlightPopup();
 }
 
-function buildHero(chapterIndex, chapterTitle, meta) {
-  const kicker = `Chapter ${chapterIndex + 1}`;
-  const parts = meta?.partLabel || "";
-  return `
-    <header class="pdf-advanced-hero">
-      <p class="pdf-advanced-kicker">${escapeHtml(kicker)}</p>
-      <div class="pdf-advanced-ornament" aria-hidden="true"><span></span><span></span><span></span></div>
-      <h1 class="pdf-advanced-title">${escapeHtml(chapterTitle)}</h1>
-      ${parts ? `<p class="pdf-advanced-meta">${escapeHtml(parts)}</p>` : ""}
-    </header>
-  `;
+// ─── Highlight popup ─────────────────────────────────────────────────────────
+
+function closeHighlightPopup() {
+  document.getElementById("pdf-hl-popup")?.remove();
 }
+
+function showHighlightPopup(chunkIndex, anchorEl, callbacks) {
+  closeHighlightPopup();
+
+  const rect = anchorEl?.getBoundingClientRect?.();
+  if (!rect) return;
+
+  const saved = callbacks.getSavedHighlight?.(chunkIndex);
+
+  const popup = document.createElement("div");
+  popup.id = "pdf-hl-popup";
+  popup.className = "pdf-hl-popup";
+  popup.style.cssText = `
+    position: fixed;
+    left: ${Math.max(12, Math.min(rect.left, window.innerWidth - 280))}px;
+    top: ${Math.max(64, rect.top - 80)}px;
+    z-index: 9999;
+  `;
+
+  popup.innerHTML = `
+    <div class="pdf-hl-popup-inner">
+      <p class="pdf-hl-popup-label">Highlight colour</p>
+      <div class="pdf-hl-swatches">
+        ${HIGHLIGHT_COLORS.map(c =>
+          `<button type="button" class="pdf-hl-swatch${saved?.color === c ? " is-active" : ""}"
+            data-color="${c}" style="background:${c}" title="${c}"></button>`
+        ).join("")}
+      </div>
+      <div class="pdf-hl-popup-actions">
+        ${saved ? `<button type="button" class="pdf-hl-remove">Remove</button>` : ""}
+        <button type="button" class="pdf-hl-cancel">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(popup);
+
+  popup.querySelectorAll(".pdf-hl-swatch").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      callbacks.onSaveHighlight?.(chunkIndex, btn.dataset.color);
+      closeHighlightPopup();
+    });
+  });
+  popup.querySelector(".pdf-hl-cancel")?.addEventListener("click", closeHighlightPopup);
+  popup.querySelector(".pdf-hl-remove")?.addEventListener("click", () => {
+    callbacks.onRemoveHighlight?.(chunkIndex);
+    closeHighlightPopup();
+  });
+
+  // Click outside to dismiss
+  const dismiss = (e) => {
+    if (!popup.contains(e.target)) {
+      closeHighlightPopup();
+      document.removeEventListener("click", dismiss, true);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", dismiss, true), 10);
+}
+
+// ─── Chapter header ───────────────────────────────────────────────────────────
+
+function buildChapterHero(chapterIndex, chapterTitle, totalChapters, callbacks) {
+  const nav = document.createElement("div");
+  nav.className = "pdf-advanced-nav";
+  nav.innerHTML = `
+    <button type="button" class="pdf-adv-nav-btn" id="pdf-adv-prev-ch" title="Previous chapter">← Prev</button>
+    <span class="pdf-adv-nav-label">Chapter ${chapterIndex + 1} of ${totalChapters}</span>
+    <button type="button" class="pdf-adv-nav-btn" id="pdf-adv-next-ch" title="Next chapter">Next →</button>
+  `;
+  nav.querySelector("#pdf-adv-prev-ch")?.addEventListener("click", () => callbacks.onAdjacentChapter?.(-1));
+  nav.querySelector("#pdf-adv-next-ch")?.addEventListener("click", () => callbacks.onAdjacentChapter?.(1));
+
+  const hero = document.createElement("header");
+  hero.className = "pdf-advanced-hero";
+  hero.innerHTML = `
+    <p class="pdf-advanced-kicker">Chapter ${chapterIndex + 1}</p>
+    <div class="pdf-advanced-ornament" aria-hidden="true"><span></span><span></span><span></span></div>
+    <h1 class="pdf-advanced-title">${escapeHtml(chapterTitle)}</h1>
+    <div class="pdf-advanced-divider" aria-hidden="true"></div>
+  `;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "pdf-advanced-hero-wrap";
+  wrapper.appendChild(nav);
+  wrapper.appendChild(hero);
+  return wrapper;
+}
+
+// ─── Main render ──────────────────────────────────────────────────────────────
 
 export function updatePdfAdvancedReader(runtime, callbacks = {}) {
   const container = ensurePdfAdvancedContainer();
@@ -91,7 +184,7 @@ export function updatePdfAdvancedReader(runtime, callbacks = {}) {
   if (!runtime?.queue?.length) {
     container.hidden = true;
     container.innerHTML = "";
-    renderedWindow = null;
+    renderedChapter = -1;
     return;
   }
 
@@ -99,102 +192,88 @@ export function updatePdfAdvancedReader(runtime, callbacks = {}) {
 
   const chunkIndex =
     runtime.currentIndex >= 0 && runtime.currentIndex < runtime.queue.length
-      ? runtime.currentIndex
-      : 0;
+      ? runtime.currentIndex : 0;
   const chunk = runtime.queue[chunkIndex];
   if (!chunk) return;
 
   const currentChapter = chunk.chapterIndex ?? 0;
   const chapterTitle = chunk.chapterTitle || `Chapter ${currentChapter + 1}`;
-  const activeIndex = chunkIndex;
+  const totalChapters = runtime.chapters?.length || 1;
+  const chapterObj = runtime.chapters?.find((c) => c.chapterIndex === currentChapter);
 
-  const ch = runtime.chapters?.find((c) => c.chapterIndex === currentChapter);
-  const partLabel =
-    ch && activeIndex >= 0
-      ? `${ch.endChunk - ch.startChunk + 1} parts in this chapter`
-      : "";
+  const chapterChanged = renderedChapter !== currentChapter;
 
-  let needsRebuild = !container.querySelector(".advanced-verse");
-  if (!needsRebuild && renderedWindow) {
-    if (renderedWindow.chapter !== currentChapter) needsRebuild = true;
-    if (activeIndex < renderedWindow.start) needsRebuild = true;
-    if (
-      activeIndex > renderedWindow.end - 5 &&
-      renderedWindow.end < runtime.queue.length - 1 &&
-      (runtime.queue[renderedWindow.end + 1].chapterIndex ?? 0) === currentChapter
-    ) {
-      needsRebuild = true;
-    }
-  } else {
-    needsRebuild = true;
-  }
+  if (chapterChanged) {
+    renderedChapter = currentChapter;
+    container.innerHTML = "";
 
-  if (needsRebuild) {
-    let startIndex = activeIndex;
-    while (
-      startIndex > 0 &&
-      (runtime.queue[startIndex - 1].chapterIndex ?? 0) === currentChapter &&
-      activeIndex - startIndex < 24
-    ) {
-      startIndex -= 1;
-    }
-    let endIndex = activeIndex;
-    while (
-      endIndex < runtime.queue.length - 1 &&
-      (runtime.queue[endIndex + 1].chapterIndex ?? 0) === currentChapter &&
-      endIndex - activeIndex < 180
-    ) {
-      endIndex += 1;
-    }
+    // Re-apply typography to the freshly wiped container
+    const settings = window.__novelTypographySettings || {};
+    applyNovelTypography(container, settings);
+    ensureNovelTypographyToolbar(container, {
+      ...settings,
+      onChange: (next) => {
+        window.__novelTypographySettings = next;
+        window.__onNovelTypographyChange?.(next);
+        applyNovelTypography(container, next);
+      },
+    });
 
-    renderedWindow = { chapter: currentChapter, start: startIndex, end: endIndex };
+    // Chapter header + navigation
+    container.appendChild(buildChapterHero(currentChapter, chapterTitle, totalChapters, callbacks));
 
-    const hero = buildHero(currentChapter, chapterTitle, { partLabel });
+    // Article body — only this chapter's paragraphs
+    const startIdx = chapterObj?.startChunk ?? chunkIndex;
+    const endIdx   = chapterObj?.endChunk   ?? chunkIndex;
+
     const body = document.createElement("article");
     body.className = "pdf-advanced-body";
 
-    for (let i = startIndex; i <= endIndex; i += 1) {
+    for (let i = startIdx; i <= endIdx; i++) {
+      const q = runtime.queue[i];
+      if (!q) continue;
+
       const p = document.createElement("p");
       p.className = "advanced-verse";
       p.dataset.chunkIndex = String(i);
-      p.textContent = runtime.queue[i].text;
+      p.textContent = q.text;
 
-      p.addEventListener("click", () => {
+      // Double-tap → highlight popup
+      p.addEventListener("click", (e) => {
         const idx = Number(p.dataset.chunkIndex);
-        userHighlightChunk = idx;
-        body.querySelectorAll(".advanced-verse").forEach((el) => {
-          el.classList.toggle("is-user-selected", Number(el.dataset.chunkIndex) === idx);
-        });
+        const now = Date.now();
+        if (lastDblTapChunk === idx && now - (p._lastTap || 0) < 380) {
+          e.preventDefault();
+          showHighlightPopup(idx, p, callbacks);
+          lastDblTapChunk = -1;
+        } else {
+          lastDblTapChunk = idx;
+          p._lastTap = now;
+        }
       });
 
-      p.addEventListener("dblclick", (event) => {
-        event.preventDefault();
+      p.addEventListener("dblclick", (e) => {
+        e.preventDefault();
         const idx = Number(p.dataset.chunkIndex);
-        const text = runtime.queue[idx]?.text || p.textContent;
-        callbacks.onHighlightVerse?.(text, idx, p);
+        showHighlightPopup(idx, p, callbacks);
       });
 
       body.appendChild(p);
     }
 
-    container.innerHTML = hero;
     container.appendChild(body);
   }
 
-  const heroEl = container.querySelector(".pdf-advanced-hero");
-  if (heroEl && needsRebuild) {
-    const titleEl = heroEl.querySelector(".pdf-advanced-title");
-    if (titleEl) titleEl.textContent = chapterTitle;
-  }
-
+  // Update active paragraph + highlights
   const verses = container.querySelectorAll(".advanced-verse");
   let activeElement = null;
 
   verses.forEach((p) => {
     const idx = Number(p.dataset.chunkIndex);
-    const isActive = idx === activeIndex;
+    const isActive = idx === chunkIndex;
     p.classList.toggle("is-active-chunk", isActive);
-    p.classList.toggle("is-user-selected", idx === userHighlightChunk && !isActive);
+
+    // Apply saved highlight color
     const saved = callbacks.getSavedHighlight?.(idx);
     if (saved?.color) {
       p.classList.add("is-saved-highlight");
@@ -206,24 +285,21 @@ export function updatePdfAdvancedReader(runtime, callbacks = {}) {
 
     if (isActive) {
       activeElement = p;
-      if (
-        runtime.activeWordRange &&
-        runtime.activeWordRange.chunkIndex === activeIndex
-      ) {
+      if (runtime.activeWordRange?.chunkIndex === chunkIndex) {
         p.innerHTML = renderTextWithActiveWord(
           runtime.queue[idx].text,
           runtime.activeWordRange.start,
           runtime.activeWordRange.end
         );
       } else {
-        p.textContent = runtime.queue[idx].text;
+        p.textContent = runtime.queue[idx]?.text || "";
       }
-    } else {
-      p.textContent = runtime.queue[idx].text;
+    } else if (!p.querySelector(".active-word")) {
+      p.textContent = runtime.queue[idx]?.text || "";
     }
   });
 
-  if (activeElement && !runtime.activeWordRange && runtime.mode === "playing") {
+  if (activeElement && runtime.mode === "playing") {
     activeElement.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 }

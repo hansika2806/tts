@@ -17,7 +17,7 @@ import {
   getPdfReaderMode,
   getPdfCurrentPage,
   isPdfExtractionBusy,
-} from "./pdf-flipbook.js?v=extract-finish";
+} from "./pdf-flipbook.js?v=pdf-full-fix";
 import { createNovelFeatures } from "./novel-features.js";
 import {
   listBooks,
@@ -287,6 +287,17 @@ async function initialize() {
     },
     onStopTts: () => stopPlayback(),
     onListenLayoutChange: () => ui.updateListenContents(),
+    onChapterJump: async (startChunk) => {
+      await state.onChapterJump?.(startChunk);
+    },
+    onAdjacentChapter: (delta) => {
+      const chapters = runtime.chapters;
+      if (!chapters?.length || runtime.currentIndex < 0) return;
+      const ci = runtime.queue[runtime.currentIndex]?.chapterIndex ?? 0;
+      const idx = chapters.findIndex((c) => c.chapterIndex === ci);
+      const target = chapters[idx + delta];
+      if (target) state.onChapterJump?.(target.startChunk);
+    },
   });
 
   window.__novelTypographySettings = {
